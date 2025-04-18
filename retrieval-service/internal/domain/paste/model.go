@@ -24,7 +24,11 @@ type ExpirationPolicy struct {
 }
 
 type RetrievePasteResponse struct {
-	URL                 string `json:"url"`
-	Content             string `json:"content"`
-	TimeUntilExpiration string `json:"time_until_expiration"`
+	URL           string `json:"url"`
+	Content       string `json:"content"`
+	RemainingTime string `json:"remaining_time"`
+}
+
+type RetrievePolicyResponse struct {
+	Policy string `json:"policy"`
 }

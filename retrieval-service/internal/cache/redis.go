@@ -3,13 +3,14 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/go-redis/redis/v8"
 	"retrieval-service/internal/domain/paste"
+	"retrieval-service/shared"
 )
 
-// PasteCache defines caching operations for pastes
 type PasteCache interface {
 	Get(url string) (*paste.Paste, error)
 	Set(p *paste.Paste) error
@@ -40,7 +41,7 @@ func NewRedisClient(uri string) (*redis.Client, error) {
 func (c *RedisPasteCache) Get(url string) (*paste.Paste, error) {
 	ctx := context.Background()
 	val, err := c.client.Get(ctx, "paste:"+url).Result()
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		return nil, nil // Cache miss
 	}
 	if err != nil {
@@ -63,7 +64,7 @@ func (c *RedisPasteCache) Set(p *paste.Paste) error {
 
 	ttl := 24 * time.Hour
 	if p.ExpirationPolicy.Type == paste.TimedExpiration {
-		if duration, ok := paste.DurationMap[p.ExpirationPolicy.Duration]; ok {
+		if duration, ok := shared.DurationMap[p.ExpirationPolicy.Duration]; ok {
 			remaining := duration - time.Since(p.CreatedAt)
 			if remaining > 0 {
 				ttl = remaining
@@ -71,7 +72,7 @@ func (c *RedisPasteCache) Set(p *paste.Paste) error {
 		}
 	}
 
-	return c.client.Set(ctx, "paste:"+url, data, ttl).Err()
+	return c.client.Set(ctx, "paste:"+p.URL, data, ttl).Err()
 }
 
 func (c *RedisPasteCache) Delete(url string) error {

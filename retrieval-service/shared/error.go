@@ -12,7 +12,6 @@ func (err HTTPError) Error() string {
 }
 
 var (
-	ErrEmptyContent    = HTTPError{Code: http.StatusBadRequest, Message: "Content must not be empty"}
-	ErrMissingDuration = HTTPError{Code: http.StatusBadRequest, Message: "Duration is required for timed expiration"}
-	ErrInternal        = HTTPError{Code: http.StatusInternalServerError, Message: "Internal server error"}
+	ErrPasteNotFound = HTTPError{Code: http.StatusNotFound, Message: "Paste not found"}
+	ErrPasteExpired  = HTTPError{Code: http.StatusNotFound, Message: "Paste has expired"}
 )
