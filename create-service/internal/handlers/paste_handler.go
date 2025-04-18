@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"log"
 	"net/http"
 
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/service/paste"
@@ -25,10 +24,6 @@ func (h *PasteHandler) CreatePaste(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("Incoming request - Content: %s, PolicyType: %v, Duration: %s",
-		req.Content,
-		req.PolicyType,
-		req.Duration)
 
 	resp, err := h.UseCase.Execute(req)
 	if err != nil {

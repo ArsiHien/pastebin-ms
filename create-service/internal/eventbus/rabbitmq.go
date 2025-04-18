@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/domain/paste"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"time"
 )
 
 type RabbitMQPublisher struct {
@@ -23,7 +24,28 @@ func NewRabbitMQPublisher(conn *amqp.Connection) (*RabbitMQPublisher, error) {
 }
 
 func (p *RabbitMQPublisher) PublishPasteCreated(paste *paste.Paste) error {
-	body, _ := json.Marshal(paste)
+	type PasteMessage struct {
+		ID         string    `json:"id"`
+		URL        string    `json:"url"`
+		Content    string    `json:"content"`
+		CreatedAt  time.Time `json:"created_at"`
+		PolicyType string    `json:"policy_type"`
+		Duration   string    `json:"duration"`
+	}
+
+	message := PasteMessage{
+		ID:         paste.ID,
+		URL:        paste.URL,
+		Content:    paste.Content,
+		CreatedAt:  paste.CreatedAt,
+		PolicyType: string(paste.ExpirationPolicy.Type),
+		Duration:   paste.ExpirationPolicy.Duration,
+	}
+
+	body, err := json.Marshal(message)
+	if err != nil {
+		return err
+	}
 	return p.channel.Publish(
 		"pastebin_events", "paste.created", false, false,
 		amqp.Publishing{ContentType: "application/json", Body: body},

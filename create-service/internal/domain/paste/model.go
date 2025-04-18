@@ -1,6 +1,10 @@
 package paste
 
-import "time"
+import (
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"time"
+)
 
 type ExpirationPolicyType string
 
@@ -11,15 +15,30 @@ const (
 )
 
 type ExpirationPolicy struct {
-	Type     ExpirationPolicyType `json:"type" bson:"type"`
-	Duration string               `json:"duration,omitempty" bson:"duration,omitempty"`
-	IsRead   bool                 `json:"is_read,omitempty" bson:"is_read,omitempty"`
+	ID       string               `gorm:"primaryKey;type:char(36)"`
+	Type     ExpirationPolicyType `gorm:"column:policy_type;type:varchar(20);not null" json:"type" bson:"type"`
+	Duration string               `gorm:"type:varchar(50)" json:"duration,omitempty" bson:"duration,omitempty"`
+}
+
+func (ep *ExpirationPolicy) BeforeCreate(*gorm.DB) error {
+	if ep.ID == "" {
+		ep.ID = uuid.New().String()
+	}
+	return nil
 }
 
 type Paste struct {
-	URL              string           `json:"url" bson:"url"`
-	Content          string           `json:"content" bson:"content"`
-	CreatedAt        time.Time        `json:"created_at" bson:"created_at"`
-	ViewCount        int              `json:"view_count" bson:"view_count"`
-	ExpirationPolicy ExpirationPolicy `json:"expiration_policy" bson:"expiration_policy"`
+	ID                 string           `gorm:"primaryKey;type:char(36)" json:"id" bson:"id"`
+	URL                string           `gorm:"type:varchar(255);unique;not null" json:"url" bson:"url"`
+	Content            string           `gorm:"type:text;not null" json:"content" bson:"content"`
+	CreatedAt          time.Time        `gorm:"autoCreateTime" json:"created_at" bson:"created_at"`
+	ExpirationPolicyID string           `gorm:"type:char(36);not null" json:"expiration_policy_id" bson:"expiration_policy_id"`
+	ExpirationPolicy   ExpirationPolicy `gorm:"foreignKey:ExpirationPolicyID;references:ID" json:"expiration_policy" bson:"-"`
+}
+
+func (p *Paste) BeforeCreate(*gorm.DB) error {
+	if p.ID == "" {
+		p.ID = uuid.New().String()
+	}
+	return nil
 }
