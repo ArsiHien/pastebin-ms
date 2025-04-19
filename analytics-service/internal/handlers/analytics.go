@@ -1,21 +1,21 @@
 package handlers
 
 import (
+	"analytics-service/shared"
 	"encoding/json"
 	"net/http"
 
-	"analytics-service/internal/domain/analytics"
 	"analytics-service/internal/service/analytics"
-	"analytics-service/internal/shared"
 	"github.com/go-chi/chi/v5"
 )
 
 type AnalyticsHandler struct {
-	service *analytics.AnalyticsService
+	service *analytics.Service
 	logger  *shared.Logger
 }
 
-func NewAnalyticsHandler(service *analytics.AnalyticsService, logger *shared.Logger) *AnalyticsHandler {
+func NewAnalyticsHandler(service *analytics.Service,
+	logger *shared.Logger) *AnalyticsHandler {
 	return &AnalyticsHandler{
 		service: service,
 		logger:  logger,
@@ -76,14 +76,23 @@ func (h *AnalyticsHandler) GetMonthlyAnalytics(w http.ResponseWriter, r *http.Re
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *AnalyticsHandler) GetPastesStats(w http.ResponseWriter, r *http.Request) {
-	stats, err := h.service.GetPastesStats(r.Context())
+func (h *AnalyticsHandler) GetPasteStats(w http.ResponseWriter, r *http.Request) {
+	pasteURL := chi.URLParam(r, "url")
+	if pasteURL == "" {
+		http.Error(w, "url is required", http.StatusBadRequest)
+		return
+	}
+
+	count, err := h.service.GetPasteStats(r.Context(), pasteURL)
 	if err != nil {
-		h.logger.Errorf("Failed to get pastes stats: %v", err)
+		h.logger.Errorf("Failed to get stats for paste %s: %v", pasteURL, err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	err = json.NewEncoder(w).Encode(map[string]int{"viewCount": count})
+	if err != nil {
+		return
+	}
 }

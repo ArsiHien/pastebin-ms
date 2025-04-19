@@ -41,7 +41,6 @@ func (p *RabbitMQPublisher) PublishPasteViewedEvent(event paste.ViewedEvent) err
 	if err != nil {
 		return err
 	}
-
 	return p.channel.Publish(
 		"pastebin_events",
 		"paste.viewed",

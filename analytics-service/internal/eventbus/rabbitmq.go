@@ -4,42 +4,50 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 
 	"analytics-service/internal/domain/analytics"
 	"github.com/rabbitmq/amqp091-go"
 )
 
-// EventConsumer defines operations for consuming events
 type EventConsumer interface {
 	Consume(ctx context.Context, handler func(analytics.PasteViewedEvent) error) error
 	Close() error
 }
 
-// RabbitMQConsumer implements EventConsumer with RabbitMQ
 type RabbitMQConsumer struct {
 	conn    *amqp091.Connection
 	channel *amqp091.Channel
 	queue   string
 }
 
-// NewRabbitMQConsumer creates a new RabbitMQConsumer
 func NewRabbitMQConsumer(conn *amqp091.Connection, queue string) (*RabbitMQConsumer, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open channel: %w", err)
 	}
 
-	_, err = ch.QueueDeclare(
+	if _, err := ch.QueueDeclare(
 		queue,
 		true,  // durable
 		false, // autoDelete
 		false, // exclusive
 		false, // noWait
 		nil,
-	)
-	if err != nil {
+	); err != nil {
 		ch.Close()
 		return nil, fmt.Errorf("failed to declare queue: %w", err)
+	}
+
+	if err := ch.QueueBind(
+		queue,
+		"paste.viewed",    // routing key
+		"pastebin_events", // exchange
+		false,
+		nil,
+	); err != nil {
+		ch.Close()
+		return nil, fmt.Errorf("failed to bind queue: %w", err)
 	}
 
 	return &RabbitMQConsumer{
@@ -52,7 +60,7 @@ func NewRabbitMQConsumer(conn *amqp091.Connection, queue string) (*RabbitMQConsu
 func (c *RabbitMQConsumer) Consume(ctx context.Context, handler func(analytics.PasteViewedEvent) error) error {
 	msgs, err := c.channel.Consume(
 		c.queue,
-		"",    // consumer
+		"",    // consumer tag
 		false, // autoAck
 		false, // exclusive
 		false, // noLocal
@@ -67,26 +75,34 @@ func (c *RabbitMQConsumer) Consume(ctx context.Context, handler func(analytics.P
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+
 		case msg := <-msgs:
+			if msg.RoutingKey != "paste.viewed" {
+				log.Printf("Skipping unrelated event: %s", msg.RoutingKey)
+				_ = msg.Ack(false)
+				continue
+			}
+
 			var event analytics.PasteViewedEvent
 			if err := json.Unmarshal(msg.Body, &event); err != nil {
-				msg.Nack(false, true)
+				log.Printf("Failed to unmarshal event: %v", err)
+				_ = msg.Nack(false, true)
 				continue
 			}
 
 			if err := handler(event); err != nil {
-				msg.Nack(false, true)
+				log.Printf("Handler error: %v", err)
+				_ = msg.Nack(false, true)
 				continue
 			}
 
-			msg.Ack(false)
+			if err := msg.Ack(false); err != nil {
+				return fmt.Errorf("failed to ack message: %w", err)
+			}
 		}
 	}
 }
 
 func (c *RabbitMQConsumer) Close() error {
-	if err := c.channel.Close(); err != nil {
-		return fmt.Errorf("failed to close channel: %w", err)
-	}
-	return nil
+	return c.channel.Close()
 }

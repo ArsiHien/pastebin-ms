@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -19,8 +20,12 @@ type TimeSeriesPoint struct {
 	ViewCount int       `json:"viewCount"`
 }
 
-type Response struct {
+type PasteTimeSeriesResponse struct {
 	PasteURL   string            `json:"pasteUrl"`
 	TotalViews int               `json:"totalViews"`
 	TimeSeries []TimeSeriesPoint `json:"timeSeries"`
 }
+
+var (
+	ErrInvalidPeriod = fmt.Errorf("invalid analytics period")
+)
