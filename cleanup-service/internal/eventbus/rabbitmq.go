@@ -1,11 +1,10 @@
 package eventbus
 
 import (
+	"cleanup-service/internal/domain/paste"
 	"context"
 	"encoding/json"
 	"fmt"
-
-	"cleanup-service/internal/domain/paste"
 	"github.com/rabbitmq/amqp091-go"
 )
 

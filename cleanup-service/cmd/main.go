@@ -42,7 +42,7 @@ func main() {
 	defer mysqlDB.Close()
 
 	// Connect to MongoDB (cleanup)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {

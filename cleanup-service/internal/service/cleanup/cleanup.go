@@ -1,15 +1,14 @@
 package cleanup
 
 import (
+	"cleanup-service/internal/domain/paste"
+	"cleanup-service/internal/eventbus"
+	"cleanup-service/internal/repository"
 	"cleanup-service/shared"
 	"context"
 	"fmt"
 	"sync"
 	"time"
-
-	"cleanup-service/internal/domain/paste"
-	"cleanup-service/internal/eventbus"
-	"cleanup-service/internal/repository"
 )
 
 type Service struct {
@@ -19,6 +18,7 @@ type Service struct {
 	cleanupRepo   repository.CleanupRepository
 	consumer      eventbus.EventConsumer
 	logger        *shared.Logger
+
 	mu            sync.Mutex
 	lastRun       time.Time
 	pastesDeleted int
@@ -42,38 +42,25 @@ func NewCleanupService(
 	}
 }
 
+// StartEventConsumer handles incoming events
 func (s *Service) StartEventConsumer(ctx context.Context) error {
 	return s.consumer.Consume(ctx, func(event interface{}) error {
 		switch e := event.(type) {
 		case paste.CreatedEvent:
-			var expireAt time.Time
-			isBurnAfterRead := false
-
-			if e.ExpirationPolicy.Type == paste.BurnAfterRead {
-				isBurnAfterRead = true
-			} else if e.ExpirationPolicy.Type == paste.TimedExpiration {
-				if duration, ok := paste.DurationMap[e.ExpirationPolicy.Duration]; ok {
-					expireAt = e.CreatedAt.Add(duration)
-				} else {
-					return fmt.Errorf("invalid duration: %s", e.ExpirationPolicy.Duration)
-				}
-			}
-
-			return s.cleanupRepo.AddTask(ctx, e.URL, expireAt, isBurnAfterRead)
+			return s.handleCreatedEvent(ctx, e)
 
 		case paste.ViewedEvent:
 			return s.cleanupRepo.MarkRead(ctx, e.URL)
 
 		case paste.BurnAfterReadPasteViewedEvent:
-			// Handle burn after read event by marking as read and scheduling immediate cleanup
 			s.logger.Infof("Processing burn after read event for URL: %s", e.URL)
+
 			if err := s.cleanupRepo.MarkRead(ctx, e.URL); err != nil {
 				return fmt.Errorf("failed to mark burn after read paste as read: %w", err)
 			}
 
-			// Optionally trigger immediate cleanup for this specific paste
 			go func(url string) {
-				if err := s.deletePaste(context.Background(), url); err != nil {
+				if err := s.deletePaste(ctx, url, true); err != nil {
 					s.logger.Errorf("Failed to delete burn after read paste %s: %v", url, err)
 				} else {
 					s.logger.Infof("Successfully deleted burn after read paste %s", url)
@@ -87,11 +74,30 @@ func (s *Service) StartEventConsumer(ctx context.Context) error {
 		}
 	})
 }
+
+func (s *Service) handleCreatedEvent(ctx context.Context, e paste.CreatedEvent) error {
+	var expireAt time.Time
+	isBurnAfterRead := false
+
+	switch e.ExpirationPolicy.Type {
+	case paste.BurnAfterRead:
+		isBurnAfterRead = true
+	case paste.TimedExpiration:
+		duration, ok := paste.DurationMap[e.ExpirationPolicy.Duration]
+		if !ok {
+			return fmt.Errorf("invalid duration: %s", e.ExpirationPolicy.Duration)
+		}
+		expireAt = e.CreatedAt.Add(duration)
+	}
+
+	return s.cleanupRepo.AddTask(ctx, e.URL, expireAt, isBurnAfterRead)
+}
+
+// RunCleanup deletes expired pastes
 func (s *Service) RunCleanup(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Get expired paste URLs
 	urls, err := s.cleanupRepo.FindExpired(ctx, time.Now())
 	if err != nil {
 		return 0, fmt.Errorf("failed to find expired pastes: %w", err)
@@ -99,7 +105,7 @@ func (s *Service) RunCleanup(ctx context.Context) (int, error) {
 
 	count := 0
 	for _, url := range urls {
-		if err := s.deletePaste(ctx, url); err != nil {
+		if err := s.deletePaste(ctx, url, false); err != nil {
 			s.logger.Errorf("Failed to delete paste %s: %v", url, err)
 			continue
 		}
@@ -111,23 +117,22 @@ func (s *Service) RunCleanup(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (s *Service) deletePaste(ctx context.Context, url string) error {
-	// Delete from MySQL
+// deletePaste deletes a paste from databases. If burnAfterRead is true, skip analytics deletion.
+func (s *Service) deletePaste(ctx context.Context, url string, burnAfterRead bool) error {
 	if err := s.mysqlRepo.Delete(ctx, url); err != nil {
 		return fmt.Errorf("failed to delete from MySQL: %w", err)
 	}
 
-	// Delete from MongoDB (retrieval)
 	if err := s.retrievalRepo.Delete(ctx, url); err != nil {
 		return fmt.Errorf("failed to delete from MongoDB retrieval: %w", err)
 	}
 
-	// Delete from MongoDB (analytics)
-	if err := s.analyticsRepo.Delete(ctx, url); err != nil {
-		return fmt.Errorf("failed to delete from MongoDB analytics: %w", err)
+	if !burnAfterRead {
+		if err := s.analyticsRepo.Delete(ctx, url); err != nil {
+			return fmt.Errorf("failed to delete from MongoDB analytics: %w", err)
+		}
 	}
 
-	// Delete from cleanup_tasks
 	if err := s.cleanupRepo.DeleteTask(ctx, url); err != nil {
 		return fmt.Errorf("failed to delete from cleanup_tasks: %w", err)
 	}
@@ -136,6 +141,7 @@ func (s *Service) deletePaste(ctx context.Context, url string) error {
 	return nil
 }
 
+// GetStatus returns the latest cleanup run metadata
 func (s *Service) GetStatus() map[string]interface{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
