@@ -1,6 +1,7 @@
 package cleanup
 
 import (
+	"cleanup-service/shared"
 	"context"
 	"fmt"
 	"sync"
@@ -9,15 +10,13 @@ import (
 	"cleanup-service/internal/domain/paste"
 	"cleanup-service/internal/eventbus"
 	"cleanup-service/internal/repository"
-	"cleanup-service/internal/shared"
 )
 
-type CleanupService struct {
+type Service struct {
 	mysqlRepo     repository.MySQLPasteRepository
 	retrievalRepo repository.RetrievalRepository
 	analyticsRepo repository.AnalyticsRepository
 	cleanupRepo   repository.CleanupRepository
-	publisher     eventbus.EventPublisher
 	consumer      eventbus.EventConsumer
 	logger        *shared.Logger
 	mu            sync.Mutex
@@ -30,44 +29,65 @@ func NewCleanupService(
 	retrievalRepo repository.RetrievalRepository,
 	analyticsRepo repository.AnalyticsRepository,
 	cleanupRepo repository.CleanupRepository,
-	publisher eventbus.EventPublisher,
 	consumer eventbus.EventConsumer,
 	logger *shared.Logger,
-) *CleanupService {
-	return &CleanupService{
+) *Service {
+	return &Service{
 		mysqlRepo:     mysqlRepo,
 		retrievalRepo: retrievalRepo,
 		analyticsRepo: analyticsRepo,
 		cleanupRepo:   cleanupRepo,
-		publisher:     publisher,
 		consumer:      consumer,
 		logger:        logger,
 	}
 }
 
-func (s *CleanupService) StartEventConsumer(ctx context.Context) error {
+func (s *Service) StartEventConsumer(ctx context.Context) error {
 	return s.consumer.Consume(ctx, func(event interface{}) error {
 		switch e := event.(type) {
-		case paste.PasteCreatedEvent:
+		case paste.CreatedEvent:
 			var expireAt time.Time
-			isBurnAfterRead := e.ExpirationPolicy.Type == paste.BurnAfterRead
-			if e.ExpirationPolicy.Type == paste.TimedExpiration {
+			isBurnAfterRead := false
+
+			if e.ExpirationPolicy.Type == paste.BurnAfterRead {
+				isBurnAfterRead = true
+			} else if e.ExpirationPolicy.Type == paste.TimedExpiration {
 				if duration, ok := paste.DurationMap[e.ExpirationPolicy.Duration]; ok {
 					expireAt = e.CreatedAt.Add(duration)
 				} else {
 					return fmt.Errorf("invalid duration: %s", e.ExpirationPolicy.Duration)
 				}
 			}
+
 			return s.cleanupRepo.AddTask(ctx, e.URL, expireAt, isBurnAfterRead)
-		case paste.PasteViewedEvent:
+
+		case paste.ViewedEvent:
 			return s.cleanupRepo.MarkRead(ctx, e.URL)
+
+		case paste.BurnAfterReadPasteViewedEvent:
+			// Handle burn after read event by marking as read and scheduling immediate cleanup
+			s.logger.Infof("Processing burn after read event for URL: %s", e.URL)
+			if err := s.cleanupRepo.MarkRead(ctx, e.URL); err != nil {
+				return fmt.Errorf("failed to mark burn after read paste as read: %w", err)
+			}
+
+			// Optionally trigger immediate cleanup for this specific paste
+			go func(url string) {
+				if err := s.deletePaste(context.Background(), url); err != nil {
+					s.logger.Errorf("Failed to delete burn after read paste %s: %v", url, err)
+				} else {
+					s.logger.Infof("Successfully deleted burn after read paste %s", url)
+				}
+			}(e.URL)
+
+			return nil
+
 		default:
 			return fmt.Errorf("unknown event type")
 		}
 	})
 }
-
-func (s *CleanupService) RunCleanup(ctx context.Context) (int, error) {
+func (s *Service) RunCleanup(ctx context.Context) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -91,7 +111,7 @@ func (s *CleanupService) RunCleanup(ctx context.Context) (int, error) {
 	return count, nil
 }
 
-func (s *CleanupService) deletePaste(ctx context.Context, url string) error {
+func (s *Service) deletePaste(ctx context.Context, url string) error {
 	// Delete from MySQL
 	if err := s.mysqlRepo.Delete(ctx, url); err != nil {
 		return fmt.Errorf("failed to delete from MySQL: %w", err)
@@ -112,20 +132,11 @@ func (s *CleanupService) deletePaste(ctx context.Context, url string) error {
 		return fmt.Errorf("failed to delete from cleanup_tasks: %w", err)
 	}
 
-	// Publish PasteDeletedEvent
-	event := paste.PasteDeletedEvent{
-		URL:       url,
-		DeletedAt: time.Now(),
-	}
-	if err := s.publisher.PublishPasteDeleted(ctx, event); err != nil {
-		s.logger.Errorf("Failed to publish PasteDeletedEvent for %s: %v", url, err)
-	}
-
 	s.logger.Infof("Deleted paste %s from all databases", url)
 	return nil
 }
 
-func (s *CleanupService) GetStatus() map[string]interface{} {
+func (s *Service) GetStatus() map[string]interface{} {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

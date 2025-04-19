@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"cleanup-service/internal/domain/paste"
 	"go.mongodb.org/mongo-driver/bson"

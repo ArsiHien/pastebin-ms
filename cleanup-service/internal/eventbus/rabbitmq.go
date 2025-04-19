@@ -9,79 +9,10 @@ import (
 	"github.com/rabbitmq/amqp091-go"
 )
 
-// EventPublisher defines operations for publishing events
-type EventPublisher interface {
-	PublishPasteDeleted(ctx context.Context, event paste.PasteDeletedEvent) error
-	Close() error
-}
-
 // EventConsumer defines operations for consuming events
 type EventConsumer interface {
 	Consume(ctx context.Context, handler func(event interface{}) error) error
 	Close() error
-}
-
-// RabbitMQPublisher implements EventPublisher with RabbitMQ
-type RabbitMQPublisher struct {
-	conn    *amqp091.Connection
-	channel *amqp091.Channel
-}
-
-func NewRabbitMQPublisher(conn *amqp091.Connection) (*RabbitMQPublisher, error) {
-	ch, err := conn.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("failed to open channel: %w", err)
-	}
-
-	err = ch.ExchangeDeclare(
-		"paste.events",
-		"topic",
-		true,  // durable
-		false, // autoDelete
-		false, // internal
-		false, // noWait
-		nil,
-	)
-	if err != nil {
-		ch.Close()
-		return nil, fmt.Errorf("failed to declare exchange: %w", err)
-	}
-
-	return &RabbitMQPublisher{
-		conn:    conn,
-		channel: ch,
-	}, nil
-}
-
-func (p *RabbitMQPublisher) PublishPasteDeleted(ctx context.Context, event paste.PasteDeletedEvent) error {
-	body, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %w", err)
-	}
-
-	err = p.channel.PublishWithContext(
-		ctx,
-		"paste.events",
-		"paste.deleted",
-		false, // mandatory
-		false, // immediate
-		amqp091.Publishing{
-			ContentType: "application/json",
-			Body:        body,
-		},
-	)
-	if err != nil {
-		return fmt.Errorf("failed to publish event: %w", err)
-	}
-
-	return nil
-}
-
-func (p *RabbitMQPublisher) Close() error {
-	if err := p.channel.Close(); err != nil {
-		return fmt.Errorf("failed to close channel: %w", err)
-	}
-	return nil
 }
 
 // RabbitMQConsumer implements EventConsumer with RabbitMQ
@@ -97,7 +28,7 @@ func NewRabbitMQConsumer(conn *amqp091.Connection) (*RabbitMQConsumer, error) {
 	}
 
 	err = ch.ExchangeDeclare(
-		"paste.events",
+		"pastebin_events", // Update exchange name
 		"topic",
 		true,  // durable
 		false, // autoDelete
@@ -106,7 +37,10 @@ func NewRabbitMQConsumer(conn *amqp091.Connection) (*RabbitMQConsumer, error) {
 		nil,
 	)
 	if err != nil {
-		ch.Close()
+		err := ch.Close()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("failed to declare exchange: %w", err)
 	}
 
@@ -119,20 +53,27 @@ func NewRabbitMQConsumer(conn *amqp091.Connection) (*RabbitMQConsumer, error) {
 		nil,
 	)
 	if err != nil {
-		ch.Close()
+		err := ch.Close()
+		if err != nil {
+			return nil, err
+		}
 		return nil, fmt.Errorf("failed to declare queue: %w", err)
 	}
 
-	for _, key := range []string{"paste.created", "paste.viewed"} {
+	// Update routing keys to match the new publisher's routing keys
+	for _, key := range []string{"paste.created", "paste.burn_after_read_paste_viewed"} {
 		err = ch.QueueBind(
 			q.Name,
 			key,
-			"paste.events",
+			"pastebin_events", // Update exchange name
 			false,
 			nil,
 		)
 		if err != nil {
-			ch.Close()
+			err := ch.Close()
+			if err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("failed to bind queue: %w", err)
 		}
 	}
@@ -165,30 +106,55 @@ func (c *RabbitMQConsumer) Consume(ctx context.Context, handler func(event inter
 			var event interface{}
 			switch msg.RoutingKey {
 			case "paste.created":
-				var e paste.PasteCreatedEvent
+				var e paste.CreatedEvent
 				if err := json.Unmarshal(msg.Body, &e); err != nil {
-					msg.Nack(false, true)
+					err := msg.Nack(false, true)
+					if err != nil {
+						return err
+					}
 					continue
 				}
 				event = e
 			case "paste.viewed":
-				var e paste.PasteViewedEvent
+				var e paste.ViewedEvent
 				if err := json.Unmarshal(msg.Body, &e); err != nil {
-					msg.Nack(false, true)
+					err := msg.Nack(false, true)
+					if err != nil {
+						return err
+					}
+					continue
+				}
+				event = e
+			case "paste.burn_after_read_paste_viewed":
+				var e paste.BurnAfterReadPasteViewedEvent
+				if err := json.Unmarshal(msg.Body, &e); err != nil {
+					err := msg.Nack(false, true)
+					if err != nil {
+						return err
+					}
 					continue
 				}
 				event = e
 			default:
-				msg.Nack(false, true)
+				err := msg.Nack(false, true)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 
 			if err := handler(event); err != nil {
-				msg.Nack(false, true)
+				err := msg.Nack(false, true)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 
-			msg.Ack(false)
+			err := msg.Ack(false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 }

@@ -1,20 +1,20 @@
 package scheduler
 
 import (
+	"cleanup-service/shared"
 	"context"
 	"time"
 
 	"cleanup-service/internal/service/cleanup"
-	"cleanup-service/internal/shared"
 )
 
 // CleanupScheduler manages periodic cleanup tasks
 type CleanupScheduler struct {
-	service *cleanup.CleanupService
+	service *cleanup.Service
 	logger  *shared.Logger
 }
 
-func NewCleanupScheduler(service *cleanup.CleanupService, logger *shared.Logger) *CleanupScheduler {
+func NewCleanupScheduler(service *cleanup.Service, logger *shared.Logger) *CleanupScheduler {
 	return &CleanupScheduler{
 		service: service,
 		logger:  logger,

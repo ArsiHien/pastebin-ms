@@ -1,20 +1,19 @@
 package handlers
 
 import (
+	"cleanup-service/shared"
 	"encoding/json"
 	"net/http"
 
 	"cleanup-service/internal/service/cleanup"
-	"cleanup-service/internal/shared"
-	"github.com/go-chi/chi/v5"
 )
 
 type CleanupHandler struct {
-	service *cleanup.CleanupService
+	service *cleanup.Service
 	logger  *shared.Logger
 }
 
-func NewCleanupHandler(service *cleanup.CleanupService, logger *shared.Logger) *CleanupHandler {
+func NewCleanupHandler(service *cleanup.Service, logger *shared.Logger) *CleanupHandler {
 	return &CleanupHandler{
 		service: service,
 		logger:  logger,
@@ -33,11 +32,17 @@ func (h *CleanupHandler) RunCleanup(w http.ResponseWriter, r *http.Request) {
 		"pastes_deleted": count,
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	err = json.NewEncoder(w).Encode(response)
+	if err != nil {
+		return
+	}
 }
 
 func (h *CleanupHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	status := h.service.GetStatus()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	err := json.NewEncoder(w).Encode(status)
+	if err != nil {
+		return
+	}
 }

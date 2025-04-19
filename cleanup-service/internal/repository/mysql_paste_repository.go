@@ -6,15 +6,19 @@ import (
 	"fmt"
 )
 
-type MySQLPasteRepository struct {
+type MySQLPasteRepository interface {
+	Delete(ctx context.Context, url string) error
+}
+
+type MySQLPasteRepositoryImpl struct {
 	db *sql.DB
 }
 
-func NewMySQLPasteRepository(db *sql.DB) *MySQLPasteRepository {
-	return &MySQLPasteRepository{db: db}
+func NewMySQLPasteRepository(db *sql.DB) MySQLPasteRepository {
+	return &MySQLPasteRepositoryImpl{db: db}
 }
 
-func (r *MySQLPasteRepository) Delete(ctx context.Context, url string) error {
+func (r *MySQLPasteRepositoryImpl) Delete(ctx context.Context, url string) error {
 	query := "DELETE FROM pastes WHERE url = ?"
 	result, err := r.db.ExecContext(ctx, query, url)
 	if err != nil {

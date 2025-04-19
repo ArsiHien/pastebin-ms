@@ -41,7 +41,7 @@ func main() {
 	}
 	defer mysqlDB.Close()
 
-	// Connect to MongoDB
+	// Connect to MongoDB (cleanup)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
@@ -49,6 +49,20 @@ func main() {
 		logger.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
 	defer mongoClient.Disconnect(ctx)
+
+	// Connect to MongoDB (retrieval)
+	retrieveMongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.RetrieveMongoURI))
+	if err != nil {
+		logger.Fatalf("Failed to connect to Retrieval MongoDB: %v", err)
+	}
+	defer retrieveMongoClient.Disconnect(ctx)
+
+	// Connect to MongoDB (analytics)
+	analyticsMongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.AnalyticsMongoURI))
+	if err != nil {
+		logger.Fatalf("Failed to connect to Analytics MongoDB: %v", err)
+	}
+	defer analyticsMongoClient.Disconnect(ctx)
 
 	// Connect to RabbitMQ
 	rabbitConn, err := shared.NewRabbitMQConn(cfg.RabbitMQURI)
@@ -59,22 +73,26 @@ func main() {
 
 	// Initialize dependencies
 	mysqlRepo := repository.NewMySQLPasteRepository(mysqlDB)
-	retrievalRepo := repository.NewMongoRetrievalRepository(mongoClient, cfg.MongoDBName)
-	analyticsRepo := repository.NewMongoAnalyticsRepository(mongoClient, cfg.MongoDBName)
+	retrievalRepo := repository.NewMongoRetrievalRepository(retrieveMongoClient, cfg.RetrieveMongoDBName)
+	analyticsRepo := repository.NewMongoAnalyticsRepository(analyticsMongoClient, cfg.AnalyticsMongoDBName)
 	cleanupRepo := repository.NewMongoCleanupRepository(mongoClient, cfg.MongoDBName)
-	publisher, err := eventbus.NewRabbitMQPublisher(rabbitConn)
-	if err != nil {
-		logger.Fatalf("Failed to create RabbitMQ publisher: %v", err)
-	}
-	defer publisher.Close()
+
 	consumer, err := eventbus.NewRabbitMQConsumer(rabbitConn)
 	if err != nil {
 		logger.Fatalf("Failed to create RabbitMQ consumer: %v", err)
 	}
 	defer consumer.Close()
 
-	cleanupService := cleanup.NewCleanupService(mysqlRepo, retrievalRepo, analyticsRepo, cleanupRepo, publisher, consumer, logger)
-	scheduler := scheduler.NewCleanupScheduler(cleanupService, logger)
+	cleanupService := cleanup.NewCleanupService(
+		mysqlRepo,
+		retrievalRepo,
+		analyticsRepo,
+		cleanupRepo,
+		consumer, // Changed from publisher to consumer to match service constructor
+		logger,
+	)
+
+	cleanupScheduler := scheduler.NewCleanupScheduler(cleanupService, logger)
 	handler := handlers.NewCleanupHandler(cleanupService, logger)
 
 	// Start event consumer
@@ -85,7 +103,7 @@ func main() {
 	}()
 
 	// Start scheduler
-	go scheduler.Start(ctx)
+	go cleanupScheduler.Start(ctx)
 
 	// Set up router
 	r := chi.NewRouter()
