@@ -49,13 +49,13 @@ services:
       - PORT=8083
       - MONGO_URI=mongodb://mongo-cleanup:27017/pastebin
       - MONGO_DB_NAME=pastebin
-      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
-      - CREATE_MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@<vm1_ip>:3306/pastebin?parseTime=true
+      - RABBITMQ_URI=amqp://guest:guest@192.168.1.110:5672/
+      - CREATE_MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@192.168.1.110:3306/pastebin?parseTime=true
       - ANALYTICS_MONGO_URI=mongodb://mongo-analytics:27017/pastebin
       - ANALYTICS_MONGO_DB_NAME=pastebin
-      - RETRIEVE_MONGO_URI=mongodb://<vm1_ip>:27017/pastebin?replicaSet=rs0
+      - RETRIEVE_MONGO_URI=mongodb://192.168.1.110:27017/pastebin?replicaSet=rs0
       - RETRIEVE_MONGO_DB_NAME=pastebin
-      - RETRIEVE_REDIS_URI=redis://<vm2_ip>:6379
+      - RETRIEVE_REDIS_URI=redis://192.168.1.112:6379
     depends_on:
       - mongo-cleanup
       - traefik
@@ -88,7 +88,7 @@ services:
       - PORT=8082
       - MONGO_URI=mongodb://mongo-analytics:27017/pastebin
       - MONGO_DB_NAME=pastebin
-      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+      - RABBITMQ_URI=amqp://guest:guest@192.168.1.110:5672/
       - RABBITMQ_QUEUE=analytics.views
     depends_on:
       - mongo-analytics

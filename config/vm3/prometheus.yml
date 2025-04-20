@@ -3,17 +3,17 @@ scrape_configs:
     static_configs:
       - targets:
           - 'create-service-1:8080'
-          - '<vm2_ip>:8080'
+          - '192.168.1.112:8080'
           - 'retrieval-service-1:8081'
-          - '<vm2_ip>:8081'
-          - '<vm3_ip>:8082'
-          - '<vm3_ip>:8083'
+          - '192.168.1.112:8081'
+          - '192.168.1.113:8082'
+          - '192.168.1.113:8083'
   - job_name: 'traefik'
     static_configs:
       - targets: ['traefik:8080']
   - job_name: 'rabbitmq'
     static_configs:
-      - targets: ['<vm1_ip>:15672']
+      - targets: ['192.168.1.110:15672']
   - job_name: 'redis'
     static_configs:
-      - targets: ['<vm2_ip>:6379']
+      - targets: ['192.168.1.112:6379']

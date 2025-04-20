@@ -34,8 +34,8 @@ services:
           memory: 512M
     environment:
       - PORT=8080
-      - MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@<vm1_ip>:3306/pastebin?parseTime=true
-      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+      - MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@192.168.1.110:3306/pastebin?parseTime=true
+      - RABBITMQ_URI=amqp://guest:guest@192.168.1.110:5672/
     depends_on:
       - traefik
     networks:
@@ -55,7 +55,7 @@ services:
       - MONGO_URI=mongodb://mongo-retrieval:27017/pastebin?replicaSet=rs0
       - MONGO_DB_NAME=pastebin
       - REDIS_URI=redis://redis:6379
-      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+      - RABBITMQ_URI=amqp://guest:guest@192.168.1.110:5672/
     depends_on:
       - mongo-retrieval
       - redis

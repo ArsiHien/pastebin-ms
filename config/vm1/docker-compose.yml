@@ -85,7 +85,7 @@ services:
       - PORT=8081
       - MONGO_URI=mongodb://mongo-retrieval-replica:27017/pastebin?replicaSet=rs0
       - MONGO_DB_NAME=pastebin
-      - REDIS_URI=redis://<vm2_ip>:6379
+      - REDIS_URI=redis://192.168.1.112:6379
       - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       - mongo-retrieval-replica

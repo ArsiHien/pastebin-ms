@@ -25,22 +25,22 @@ http:
       loadBalancer:
         servers:
           - url: "http://create-service-1:8080"
-          - url: "http://<vm2_ip>:8080"
+          - url: "http://192.168.1.112:8080"
     retrieval-service:
       loadBalancer:
         servers:
           - url: "http://retrieval-service-1:8081"
             weight: 1
-          - url: "http://<vm2_ip>:8081"
+          - url: "http://192.168.1.112:8081"
             weight: 3
     analytics-service:
       loadBalancer:
         servers:
-          - url: "http://<vm3_ip>:8082"
+          - url: "http://192.168.1.113:8082"
     cleanup-service:
       loadBalancer:
         servers:
-          - url: "http://<vm3_ip>:8083"
+          - url: "http://192.168.1.113:8083"
 entryPoints:
   web:
     address: ":80"
