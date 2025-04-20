@@ -1,0 +1,73 @@
+version: '3.8'
+services:
+  mongo-retrieval:
+    image: mongo:6.0
+    command: ["mongod", "--replSet", "rs0"]
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-retrieval-data:/data/db
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+    networks:
+      - pastebin
+  redis:
+    image: redis:7.0
+    volumes:
+      - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    networks:
+      - pastebin
+  create-service-2:
+    build: ../../create-service
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    environment:
+      - PORT=8080
+      - MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@<vm1_ip>:3306/pastebin?parseTime=true
+      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+    depends_on:
+      - traefik
+    networks:
+      - pastebin
+    labels:
+      - "traefik.http.services.create-service.loadbalancer.server.port=8080"
+      - "traefik.http.routers.create.rule=PathPrefix(`/api/pastes`) && Method(`POST`)"
+  retrieval-service-2:
+    build: ../../retrieval-service
+    deploy:
+      resources:
+        limits:
+          cpus: "0.75"
+          memory: 1.5G
+    environment:
+      - PORT=8081
+      - MONGO_URI=mongodb://mongo-retrieval:27017/pastebin?replicaSet=rs0
+      - MONGO_DB_NAME=pastebin
+      - REDIS_URI=redis://redis:6379
+      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+    depends_on:
+      - mongo-retrieval
+      - redis
+      - traefik
+    networks:
+      - pastebin
+    labels:
+      - "traefik.http.services.retrieval-service.loadbalancer.server.port=8081"
+      - "traefik.http.routers.retrieval.rule=PathRegexp(`/api/pastes/{url}/(content|policy)`) && Method(`GET`)"
+volumes:
+  mongo-retrieval-data:
+  redis-data:
+networks:
+  pastebin:
+    driver: bridge

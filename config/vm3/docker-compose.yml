@@ -1,0 +1,108 @@
+version: "3.8"
+services:
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    networks:
+      - pastebin
+  grafana:
+    image: grafana/grafana:10.0.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    networks:
+      - pastebin
+  mongo-cleanup:
+    image: mongo:6.0
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-cleanup-data:/data/db
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    networks:
+      - pastebin
+  cleanup-service:
+    build: ../../management-service
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    environment:
+      - PORT=8083
+      - MONGO_URI=mongodb://mongo-cleanup:27017/pastebin
+      - MONGO_DB_NAME=pastebin
+      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+      - CREATE_MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@<vm1_ip>:3306/pastebin?parseTime=true
+      - ANALYTICS_MONGO_URI=mongodb://mongo-analytics:27017/pastebin
+      - ANALYTICS_MONGO_DB_NAME=pastebin
+      - RETRIEVE_MONGO_URI=mongodb://<vm1_ip>:27017/pastebin?replicaSet=rs0
+      - RETRIEVE_MONGO_DB_NAME=pastebin
+      - RETRIEVE_REDIS_URI=redis://<vm2_ip>:6379
+    depends_on:
+      - mongo-cleanup
+      - traefik
+    networks:
+      - pastebin
+    labels:
+      - "traefik.http.services.cleanup-service.loadbalancer.server.port=8083"
+      - "traefik.http.routers.cleanup.rule=PathPrefix(`/api/cleanup`)"
+  mongo-analytics:
+    image: mongo:6.0
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-analytics-data:/data/db
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 1G
+    networks:
+      - pastebin
+  analytics-service:
+    build: ../../analytics-service
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 512M
+    environment:
+      - PORT=8082
+      - MONGO_URI=mongodb://mongo-analytics:27017/pastebin
+      - MONGO_DB_NAME=pastebin
+      - RABBITMQ_URI=amqp://guest:guest@<vm1_ip>:5672/
+      - RABBITMQ_QUEUE=analytics.views
+    depends_on:
+      - mongo-analytics
+      - traefik
+    networks:
+      - pastebin
+    labels:
+      - "traefik.http.services.analytics-service.loadbalancer.server.port=8082"
+      - "traefik.http.routers.analytics.rule=PathRegexp(`/api/analytics/(hourly|weekly|monthly)/{pasteUrl}`) || PathRegexp(`/api/pastes/{url}/stats`) && Method(`GET`)"
+volumes:
+  prometheus-data:
+  grafana-data:
+  mongo-cleanup-data:
+  mongo-analytics-data:
+networks:
+  pastebin:
+    driver: bridge

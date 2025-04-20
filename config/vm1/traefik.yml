@@ -1,0 +1,46 @@
+http:
+  routers:
+    create:
+      rule: "PathPrefix(`/api/pastes`) && Method(`POST`)"
+      service: create-service
+      entryPoints:
+        - web
+    retrieval:
+      rule: "PathRegexp(`/api/pastes/{url}/(content|policy)`) && Method(`GET`)"
+      service: retrieval-service
+      entryPoints:
+        - web
+    analytics:
+      rule: "PathRegexp(`/api/analytics/(hourly|weekly|monthly)/{pasteUrl}`) || PathRegexp(`/api/pastes/{url}/stats`) && Method(`GET`)"
+      service: analytics-service
+      entryPoints:
+        - web
+    cleanup:
+      rule: "PathPrefix(`/api/cleanup`)"
+      service: cleanup-service
+      entryPoints:
+        - web
+  services:
+    create-service:
+      loadBalancer:
+        servers:
+          - url: "http://create-service-1:8080"
+          - url: "http://<vm2_ip>:8080"
+    retrieval-service:
+      loadBalancer:
+        servers:
+          - url: "http://retrieval-service-1:8081"
+            weight: 1
+          - url: "http://<vm2_ip>:8081"
+            weight: 3
+    analytics-service:
+      loadBalancer:
+        servers:
+          - url: "http://<vm3_ip>:8082"
+    cleanup-service:
+      loadBalancer:
+        servers:
+          - url: "http://<vm3_ip>:8083"
+entryPoints:
+  web:
+    address: ":80"
