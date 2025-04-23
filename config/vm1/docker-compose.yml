@@ -1,11 +1,18 @@
-version: '3.8'
 services:
   traefik:
-    image: traefik:v2.10
+    image: "traefik:v3.3"
+    container_name: "traefik"
+    command:
+      #- "--log.level=DEBUG"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entryPoints.web.address=:80"
     ports:
       - "80:80"
+      - "8080:8080"
     volumes:
-      - ./traefik.yml:/etc/traefik/traefik.yml
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
     deploy:
       resources:
         limits:
@@ -24,6 +31,8 @@ services:
           memory: 512M
     networks:
       - pastebin
+    ports:
+      - "5672:5672"
   mysql:
     image: mysql:8.0
     environment:
@@ -40,6 +49,8 @@ services:
           memory: 1G
     networks:
       - pastebin
+    ports:
+      - "3306:3306"
   mongo-retrieval-replica:
     image: mongo:6.0
     command: ["mongod", "--replSet", "rs0"]
@@ -62,18 +73,21 @@ services:
           cpus: "0.25"
           memory: 512M
     environment:
-      - PORT=8080
-      - MYSQL_DSN=mysql://${MYSQL_USER}:${MYSQL_PASSWORD}@mysql:3306/pastebin?parseTime=true
+      - PORT=8085
+      - MYSQL_DSN=${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(mysql:3306)/pastebin?parseTime=true
       - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       - mysql
       - rabbitmq
-      - traefik
     networks:
       - pastebin
+    ports:
+      - "8085:8085"
     labels:
-      - "traefik.http.services.create-service.loadbalancer.server.port=8080"
-      - "traefik.http.routers.create.rule=PathPrefix(`/api/pastes`) && Method(`POST`)"
+      - "traefik.enable=true"
+      - "traefik.http.routers.create-service.rule=PathPrefix(`/api/pastes`) && Method(`POST`)"
+      - "traefik.http.routers.create-service.entrypoints=web"
+      - "traefik.http.services.create-service.loadbalancer.server.port=8085"
   retrieval-service-1:
     build: ../../retrieval-service
     deploy:
@@ -83,17 +97,18 @@ services:
           memory: 1G
     environment:
       - PORT=8081
-      - MONGO_URI=mongodb://mongo-retrieval-replica:27017/pastebin?replicaSet=rs0
-      - MONGO_DB_NAME=pastebin
-      - REDIS_URI=redis://192.168.1.112:6379
+      - MONGO_URI=${MONGO_URI}
+      - MONGO_DB_NAME=${MONGO_DB_NAME}
+      - REDIS_URI=${REDIS_URI}
       - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       - mongo-retrieval-replica
       - rabbitmq
-      - traefik
     networks:
       - pastebin
     labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.retrieval-service.entrypoints=web"
       - "traefik.http.services.retrieval-service.loadbalancer.server.port=8081"
       - "traefik.http.routers.retrieval.rule=PathRegexp(`/api/pastes/{url}/(content|policy)`) && Method(`GET`)"
 volumes:
