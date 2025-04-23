@@ -1,0 +1,11 @@
+entryPoints:
+  web:
+    address: ":80"
+
+providers:
+  file:
+    filename: ~/pastebin-ms/config/vm1/dynamic.yml
+    watch: true
+
+log:
+  level: DEBUG

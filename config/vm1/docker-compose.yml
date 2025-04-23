@@ -53,9 +53,11 @@ services:
       - "3306:3306"
   mongo-retrieval-replica:
     image: mongo:6.0
-    command: ["mongod", "--replSet", "rs0"]
+    command: ["mongod", "--replSet", "rs0", "--bind_ip", "0.0.0.0"]
     environment:
       - MONGO_INITDB_DATABASE=pastebin
+    ports:
+      - "27018:27017"
     volumes:
       - mongo-retrieval-replica-data:/data/db
     deploy:
