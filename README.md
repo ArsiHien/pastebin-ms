@@ -78,9 +78,9 @@ Tạo overlay network cho các dịch vụ trong swarm:
 sudo docker network create --driver overlay --attachable pastebin-net
 ```
 
-## Sửa file docker-compose.yml
+## Sửa file infrastructure/database/application.yml
 
-Sửa các phần deploy trong file `docker-compose.yml` ở thư mục deploy để phân bổ các dịch vụ
+Sửa các phần deploy trong các file `infrastructure/database/application.yml` ở thư mục deploy để phân bổ các dịch vụ
 
 ```yaml
 version: '3.8'
@@ -100,26 +100,9 @@ services:
 ```
 
 ## Triển khai stack
-
-Di chuyển vào thư mục chứa file `docker-compose.yml` và triển khai stack:
+Chạy file deploy
 
 ```bash
 cd deploy/
-sudo docker stack deploy -c docker-compose.yml pastebin-net
-```
-
-## Giám sát dịch vụ
-
-### Kiểm tra trạng thái các dịch vụ
-
-```bash
-sudo docker stack services pastebin-net
-```
-
-Lệnh này sẽ hiển thị danh sách các dịch vụ đang chạy, số lượng replicas đã triển khai và trạng thái hiện tại.
-
-### Xem logs của một dịch vụ
-
-```bash
-sudo docker service logs pastebin-net_traefik
+./deploy.sh
 ```
