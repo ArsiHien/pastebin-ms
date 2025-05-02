@@ -1,6 +1,8 @@
 package config
 
 import (
+	"errors"
+	"fmt"
 	"github.com/joho/godotenv"
 	"log"
 	"os"
@@ -15,21 +17,28 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	// Chỉ load .env file nếu đang chạy ở môi trường dev
-	if os.Getenv("ENV") == "dev" {
-			log.Println("Loading environment variables from .env file")
-			if err := godotenv.Load(); err != nil {
-					log.Println("Warning: failed to load .env file")
-			}
+	err := godotenv.Load()
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("failed to load .env file: %w", err)
+		}
+		log.Println("No .env file found, skipping")
 	}
 
-	config := &Config{
-			Port:        os.Getenv("PORT"),
-			MongoURI:    os.Getenv("MONGO_URI"),
-			MongoDBName: os.Getenv("MONGO_DB_NAME"),
-			RedisURI:    os.Getenv("REDIS_URI"),
-			RabbitMQURI: os.Getenv("RABBITMQ_URI"),
+	cfg := &Config{
+		Port:        getEnv("PORT", "8082"),
+		MongoURI:    getEnv("MONGO_URI", "mongodb://localhost:27017"),
+		MongoDBName: getEnv("MONGO_DB_NAME", "pastebin"),
+		RedisURI:    getEnv("REDIS_URI", "redis://localhost:6379"),
+		RabbitMQURI: getEnv("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/"),
 	}
 
-	return config, nil
+	return cfg, nil
+}
+
+func getEnv(key, defaultValue string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return defaultValue
 }
