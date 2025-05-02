@@ -1,0 +1,202 @@
+version: '3.8'
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=123456
+      - MYSQL_DATABASE=pastebin
+      - MYSQL_USER=pastebin
+      - MYSQL_PASSWORD=123456
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - 3306:3306
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "pastebin", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - pastebin-net
+
+  redis:
+    image: redis:7.0
+    volumes:
+      - redis-data:/data
+    ports:
+      - 6379:6379
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pastebin-net
+
+  # MongoDB Retrieval Cluster
+  mongo-retrieval-1:
+    image: mongo:8.0-noble
+    command: ["mongod", "--replSet", "rs0", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-retrieval-1-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == vm1
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    networks:
+      - pastebin-net
+    ports:
+      - "27017:27017"
+
+  mongo-retrieval-2:
+    image: mongo:8.0-noble
+    command: ["mongod", "--replSet", "rs0", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-retrieval-2-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    networks:
+      - pastebin-net
+    ports:
+      - "27018:27017"
+
+  # MongoDB Init Container
+  mongo-init:
+    image: mongo:6.0
+    command: >
+      /bin/bash -c "
+      echo 'Waiting for MongoDB to start...' &&
+      sleep 15 &&
+      mongosh --host mongo-retrieval-1:27017 --eval '
+      rs.initiate({
+        _id: \"rs0\",
+        members: [
+          {_id: 0, host: \"mongo-retrieval-1:27017\"},
+          {_id: 1, host: \"mongo-retrieval-2:27017\"}
+        ]
+      })
+      ' || echo 'Failed to initialize replica set'"
+    depends_on:
+      - mongo-retrieval-1
+      - mongo-retrieval-2
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.hostname == vm1
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+
+  # MongoDB Cleanup Service
+  mongo-cleanup:
+    image: mongo:8.0-noble
+    command: ["mongod", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=cleanup
+    volumes:
+      - mongo-cleanup-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - pastebin-net
+    ports:
+      - "27019:27017"
+
+  # MongoDB Analytics Service
+  mongo-analytics:
+    image: mongo:8.0-noble
+    command: ["mongod", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=analytics
+    volumes:
+      - mongo-analytics-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - pastebin-net
+    ports:
+      - "27020:27017"
+
+volumes:
+  mysql-data:
+  mongo-retrieval-1-data:
+  mongo-retrieval-2-data:
+  redis-data:
+  mongo-cleanup-data:
+  mongo-analytics-data:
+  
+networks:
+  pastebin-net:
+    external: true

@@ -179,7 +179,7 @@ services:
       replicas: 1
       placement:
         constraints:
-          - node.hostname == test
+          - node.hostname == vm1
       resources:
         limits:
           cpus: "0.2"
@@ -194,7 +194,7 @@ services:
     ports:
       - "8081:8081"
 
-  retrieval-service-1:
+  retrieval-service:
     image: arsihien/pastebin-retrieval-service:latest
     environment:
       - ENV=${ENV}
@@ -209,66 +209,20 @@ services:
       - redis
       - rabbitmq
     deploy:
-      placement:
-        constraints:
-          - node.hostname == vm1
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1G
+      replicas: 2
+      # placement:
+      #   constraints:
+      #     - node.hostname == vm1
+      #     - node.hostname == test
       labels:
         - "traefik.enable=true"
-        - "traefik.http.routers.retrieval-service-1.rule=Path(`/api/pastes/{url}/content`) || Path(`/api/pastes/{url}/policy`)"
-        - "traefik.http.routers.retrieval-service-1.entrypoints=web"
-        - "traefik.http.services.retrieval-service-1.loadbalancer.server.port=8082"
-        # Weight is configured differently in Traefik v3
+        - "traefik.http.routers.retrieval-service.rule=PathRegexp(`/api/pastes/[a-zA-Z0-9]+/(content|policy)`)"
+        - "traefik.http.routers.retrieval-service.entrypoints=web"
         - "traefik.http.services.retrieval-service.loadbalancer.server.port=8082"
-        # Create a service with both servers
-        - "traefik.http.routers.retrieval.rule=Path(`/api/pastes/{url}/content`) || Path(`/api/pastes/{url}/policy`)"
-        - "traefik.http.routers.retrieval.entrypoints=web"
-        - "traefik.http.routers.retrieval.service=retrieval-service"
     networks:
       - pastebin-net
     volumes:
       - ./.env:/app/.env
-    ports:
-      - "8082:8082"
-
-  retrieval-service-2:
-    image: arsihien/pastebin-retrieval-service:latest
-    environment:
-      - ENV=${ENV}
-      - PORT=8083
-      - MONGO_URI=mongodb://mongo-retrieval-1:27017,mongo-retrieval-2:27017/pastebin?replicaSet=rs0
-      - MONGO_DB_NAME=pastebin
-      - REDIS_URI=redis://redis:6379
-      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
-    depends_on:
-      - mongo-retrieval-1
-      - mongo-retrieval-2
-      - redis
-      - rabbitmq
-    deploy:
-      placement:
-        constraints:
-          - node.hostname == test
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 1G
-      labels:
-        - "traefik.enable=true"
-        - "traefik.http.routers.retrieval-service-2.rule=Path(`/api/pastes/{url}/content`) || Path(`/api/pastes/{url}/policy`)"
-        - "traefik.http.routers.retrieval-service-2.entrypoints=web"
-        - "traefik.http.services.retrieval-service-2.loadbalancer.server.port=8083"
-        # Weight is configured differently in Traefik v3
-        - "traefik.http.services.retrieval-service.loadbalancer.server.port=8083"
-    networks:
-      - pastebin-net
-    volumes:
-      - ./.env:/app/.env
-    ports:
-      - "8083:8083"
 
   prometheus:
     image: prom/prometheus:v2.47.0
