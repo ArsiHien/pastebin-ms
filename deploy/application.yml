@@ -1,0 +1,110 @@
+version: '3.8'
+services:
+  create-service:
+    image: arsihien/pastebin-create-service:latest
+    environment:
+      - PORT=8081
+      - MYSQL_DSN=pastebin:123456@tcp(mysql:3306)/pastebin?parseTime=true
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.hostname == vm1
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.create-service.rule=PathPrefix(`/api/pastes`) && Method(`POST`)"
+        - "traefik.http.routers.create-service.entrypoints=web"
+        - "traefik.http.services.create-service.loadbalancer.server.port=8081"
+    networks:
+      - pastebin-net
+    ports:
+      - "8081:8081"
+
+  retrieval-service:
+    image: arsihien/pastebin-retrieval-service:latest
+    environment:
+      - ENV=prod
+      - PORT=8082
+      - MONGO_URI=mongodb://mongo-retrieval-1:27017,mongo-retrieval-2:27017/pastebin?replicaSet=rs0
+      - MONGO_DB_NAME=pastebin
+      - REDIS_URI=redis://redis:6379
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    deploy:
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.retrieval-service.rule=PathRegexp(`/api/pastes/[a-zA-Z0-9]+/(content|policy)`)"
+        - "traefik.http.routers.retrieval-service.entrypoints=web"
+        - "traefik.http.services.retrieval-service.loadbalancer.server.port=8082"
+    networks:
+      - pastebin-net
+
+  cleanup-service:
+    image: arsihien/pastebin-cleanup-service:latest
+    environment:
+      - MONGO_URI=mongodb://mongo-cleanup:27017/cleanup
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.cleanup-service.loadbalancer.server.port=8084"
+    networks:
+      - pastebin-net
+    ports:
+      - "8084:8084"
+
+  analytics-service:
+    image: arsihien/pastebin-analytics-service:latest
+    environment:
+      - PORT=8085
+      - MONGO_URI=mongodb://mongo-analytics:27017/analytics
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.analytics-service.rule=PathPrefix(`/api/analytics`) || PathRegexp(`/api/pastes/[a-zA-Z0-9]+/stats`)"
+        - "traefik.http.routers.analytics-service.entrypoints=web"
+        - "traefik.http.services.analytics-service.loadbalancer.server.port=8085"
+    networks:
+      - pastebin-net
+    ports:
+      - "8085:8085"
+
+networks:
+  pastebin-net:
+    external: true

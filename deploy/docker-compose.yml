@@ -1,0 +1,388 @@
+version: '3.8'
+services:
+  traefik:
+    image: traefik:v3.3
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.swarm=true"
+      - "--entryPoints.web.address=:80"
+      - "--log.level=DEBUG"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+    networks:
+      - pastebin-net
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - 5672:5672
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=123456
+      - MYSQL_DATABASE=pastebin
+      - MYSQL_USER=pastebin
+      - MYSQL_PASSWORD=123456
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - 3306:3306
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+
+  mongo-retrieval-1:
+    image: mongo:6.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-retrieval-1-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == vm1
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+    ports:
+      - "27017:27017"
+
+  mongo-retrieval-2:
+    image: mongo:6.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=pastebin
+    volumes:
+      - mongo-retrieval-2-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+    ports:
+      - "27018:27017"
+
+  # MongoDB Init Container để thiết lập replica set
+  mongo-init:
+    image: mongo:6.0
+    command: >
+      /bin/bash -c "
+      echo 'Waiting for MongoDB to start...' &&
+      sleep 15 &&
+      mongosh --host mongo-retrieval-1:27017 --eval '
+      rs.initiate({
+        _id: \"rs0\",
+        members: [
+          {_id: 0, host: \"mongo-retrieval-1:27017\"},
+          {_id: 1, host: \"mongo-retrieval-2:27017\"}
+        ]
+      })
+      ' || echo 'Failed to initialize replica set'"
+    depends_on:
+      - mongo-retrieval-1
+      - mongo-retrieval-2
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+      placement:
+        constraints:
+          - node.hostname == vm1
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+
+  redis:
+    image: redis:7.0
+    volumes:
+      - redis-data:/data
+    ports:
+      - 6379:6379
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+
+  create-service:
+    image: arsihien/pastebin-create-service:latest
+    environment:
+      - PORT=8081
+      - MYSQL_DSN=pastebin:123456@tcp(mysql:3306)/pastebin?parseTime=true
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - mysql
+      - rabbitmq
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == vm1
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.create-service.rule=PathPrefix(`/api/pastes`) && Method(`POST`)"
+        - "traefik.http.routers.create-service.entrypoints=web"
+        - "traefik.http.services.create-service.loadbalancer.server.port=8081"
+    networks:
+      - pastebin-net
+    ports:
+      - "8081:8081"
+
+  retrieval-service:
+    image: arsihien/pastebin-retrieval-service:latest
+    environment:
+      - ENV=prod
+      - PORT=8082
+      - MONGO_URI=mongodb://mongo-retrieval-1:27017,mongo-retrieval-2:27017/pastebin?replicaSet=rs0
+      - MONGO_DB_NAME=pastebin
+      - REDIS_URI=redis://redis:6379
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - mongo-retrieval-1
+      - mongo-retrieval-2
+      - redis
+      - rabbitmq
+    deploy:
+      replicas: 2
+      placement:
+        constraints:
+          # - node.hostname == vm1
+          - node.hostname == test
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.retrieval-service.rule=PathRegexp(`/api/pastes/[a-zA-Z0-9]+/(content|policy)`)"
+        - "traefik.http.routers.retrieval-service.entrypoints=web"
+        - "traefik.http.services.retrieval-service.loadbalancer.server.port=8082"
+    networks:
+      - pastebin-net
+
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    volumes:
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+    networks:
+      - pastebin-net
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.1.0
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)"
+        - "traefik.http.routers.grafana.entrypoints=web"
+        - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    networks:
+      - pastebin-net
+    ports:
+      - "3000:3000"
+
+  mongo-cleanup:
+    image: mongo:6.0
+    command: ["mongod", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=cleanup
+    volumes:
+      - mongo-cleanup-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+    ports:
+      - "27019:27017"
+
+  cleanup-service:
+    image: arsihien/pastebin-cleanup-service:latest
+    environment:
+      - MONGO_URI=mongodb://mongo-cleanup:27017/cleanup
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - mongo-cleanup
+      - rabbitmq
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.cleanup-service.loadbalancer.server.port=8084"
+    networks:
+      - pastebin-net
+    ports:
+      - "8084:8084"
+
+  mongo-analytics:
+    image: mongo:6.0
+    command: ["mongod", "--bind_ip", "0.0.0.0"]
+    environment:
+      - MONGO_INITDB_DATABASE=analytics
+    volumes:
+      - mongo-analytics-data:/data/db
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"  # Not exposing through Traefik
+    networks:
+      - pastebin-net
+    ports:
+      - "27020:27017"
+
+  analytics-service:
+    image: arsihien/pastebin-analytics-service:latest
+    environment:
+      - PORT=8085
+      - MONGO_URI=mongodb://mongo-analytics:27017/analytics
+      - RABBITMQ_URI=amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      - mongo-analytics
+      - rabbitmq
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.analytics-service.rule=PathPrefix(`/api/analytics`) || Path(`/api/pastes/{url}/stats`)"
+        - "traefik.http.routers.analytics-service.entrypoints=web"
+        - "traefik.http.services.analytics-service.loadbalancer.server.port=8085"
+    networks:
+      - pastebin-net
+    ports:
+      - "8085:8085"
+
+volumes:
+  rabbitmq-data:
+  mysql-data:
+  mongo-retrieval-1-data:
+  mongo-retrieval-2-data:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+  mongo-cleanup-data:
+  mongo-analytics-data:
+
+networks:
+  pastebin-net:
+    external: true
+
+configs:
+  prometheus_config:
+    file: ./prometheus.yml

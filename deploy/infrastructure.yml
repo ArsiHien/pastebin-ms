@@ -1,0 +1,113 @@
+version: '3.8'
+services:
+  traefik:
+    image: traefik:v3.3
+    command:
+      - "--api.insecure=true"
+      - "--providers.swarm=true"
+      - "--providers.swarm.network=pastebin-net"
+      - "--entryPoints.web.address=:80"
+      - "--log.level=DEBUG"
+    ports:
+      - "80:80"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.1"
+          memory: 128M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.traefik.loadbalancer.server.port=8080"
+        - "traefik.swarm.network=pastebin-net"
+    networks:
+      - pastebin-net
+
+  rabbitmq:
+    image: rabbitmq:3.13.7-management-alpine
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    ports:
+      - 5672:5672
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 512M
+      labels:
+        - "traefik.enable=false"
+    networks:
+      - pastebin-net
+
+  prometheus:
+    image: prom/prometheus:v3.3.0
+    volumes:
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    configs:
+      - source: prometheus_config
+        target: /etc/prometheus/prometheus.yml
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.services.prometheus.loadbalancer.server.port=9090"
+    networks:
+      - pastebin-net
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana-enterprise
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    deploy:
+      placement:
+        constraints:
+          - node.hostname == test
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 256M
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.grafana.rule=PathPrefix(`/grafana`)"
+        - "traefik.http.routers.grafana.entrypoints=web"
+        - "traefik.http.services.grafana.loadbalancer.server.port=3000"
+    networks:
+      - pastebin-net
+    ports:
+      - "3000:3000"
+
+volumes:
+  rabbitmq-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  pastebin-net:
+    external: true
+
+configs:
+  prometheus_config:
+    file: ./prometheus.yml
