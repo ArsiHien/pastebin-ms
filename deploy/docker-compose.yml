@@ -197,7 +197,7 @@ services:
   retrieval-service:
     image: arsihien/pastebin-retrieval-service:latest
     environment:
-      - ENV=${ENV}
+      - ENV=prod
       - PORT=8082
       - MONGO_URI=mongodb://mongo-retrieval-1:27017,mongo-retrieval-2:27017/pastebin?replicaSet=rs0
       - MONGO_DB_NAME=pastebin
@@ -210,10 +210,10 @@ services:
       - rabbitmq
     deploy:
       replicas: 2
-      # placement:
-      #   constraints:
-      #     - node.hostname == vm1
-      #     - node.hostname == test
+      placement:
+        constraints:
+          # - node.hostname == vm1
+          - node.hostname == test
       labels:
         - "traefik.enable=true"
         - "traefik.http.routers.retrieval-service.rule=PathRegexp(`/api/pastes/[a-zA-Z0-9]+/(content|policy)`)"
@@ -221,8 +221,6 @@ services:
         - "traefik.http.services.retrieval-service.loadbalancer.server.port=8082"
     networks:
       - pastebin-net
-    volumes:
-      - ./.env:/app/.env
 
   prometheus:
     image: prom/prometheus:v2.47.0
