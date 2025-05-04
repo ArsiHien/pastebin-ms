@@ -4,6 +4,7 @@ import (
 	"analytics-service/config"
 	"analytics-service/internal/eventbus"
 	"analytics-service/internal/handlers"
+	"analytics-service/internal/metrics"
 	"analytics-service/internal/repository"
 	"analytics-service/internal/service/analytics"
 	"analytics-service/shared"
@@ -58,6 +59,8 @@ func main() {
 			logger.Fatalf("Failed to close RabbitMQ connection: %v", err)
 		}
 	}(rabbitConn)
+
+	metrics.ExposeMetrics()
 
 	// Initialize dependencies
 	viewRepo := repository.NewMongoAnalyticsRepository(mongoClient, cfg.MongoDBName)

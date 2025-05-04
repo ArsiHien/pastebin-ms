@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"encoding/json"
+	"retrieval-service/internal/metrics"
 	"retrieval-service/shared"
 	"time"
 
@@ -144,6 +145,12 @@ func (c *RabbitMQConsumer) handleMessage(delivery amqp.Delivery) {
 			return
 		} // Requeue for retry
 		return
+	}
+
+	if !newPaste.CreatedAt.IsZero() {
+		duration := time.Since(newPaste.CreatedAt).Seconds()
+		metrics.PasteProcessingDuration.Observe(duration)
+		c.logger.Infof("Latency from CreatedAt to Mongo save: %.3f seconds", duration)
 	}
 
 	c.logger.Infof("Saved paste with URL: %s", message.URL)

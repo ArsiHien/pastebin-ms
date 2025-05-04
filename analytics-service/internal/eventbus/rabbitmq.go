@@ -1,10 +1,12 @@
 package eventbus
 
 import (
+	"analytics-service/internal/metrics"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"time"
 
 	"analytics-service/internal/domain/analytics"
 	"github.com/rabbitmq/amqp091-go"
@@ -95,6 +97,8 @@ func (c *RabbitMQConsumer) Consume(ctx context.Context, handler func(analytics.P
 				_ = msg.Nack(false, true)
 				continue
 			}
+
+			metrics.PasteEventDuration.Observe(float64(time.Since(event.ViewedAt)))
 
 			if err := msg.Ack(false); err != nil {
 				return fmt.Errorf("failed to ack message: %w", err)

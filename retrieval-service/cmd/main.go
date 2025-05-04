@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"retrieval-service/internal/metrics"
 	"retrieval-service/shared"
 	"syscall"
 	"time"
@@ -79,6 +80,8 @@ func main() {
 			logger.Infof("Disconnected from RabbitMQ")
 		}
 	}(rabbitConn)
+
+	metrics.Init()
 
 	// Initialize dependencies
 	pasteRepo := repository.NewMongoPasteRepository(mongoClient.Database(cfg.MongoDBName))
