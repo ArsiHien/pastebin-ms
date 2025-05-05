@@ -9,13 +9,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"retrieval-service/internal/metrics"
 	"retrieval-service/shared"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"retrieval-service/config"
@@ -35,6 +35,7 @@ func main() {
 
 	// Initialize logger
 	logger := shared.NewLogger()
+	defer logger.Sync()
 
 	// Connect to MongoDB
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -42,26 +43,24 @@ func main() {
 	log.Println(cfg.MongoURI)
 	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI(cfg.MongoURI))
 	if err != nil {
-		logger.Fatalf("Failed to connect to MongoDB: %v", err)
+		logger.Fatalf("Failed to connect to MongoDB", "error", err)
 	}
 	defer func(mongoClient *mongo.Client, ctx context.Context) {
-		err := mongoClient.Disconnect(ctx)
-		if err != nil {
-			logger.Fatalf("Failed to disconnect from MongoDB: %v", err)
+		if err := mongoClient.Disconnect(ctx); err != nil {
+			logger.Errorf("Failed to disconnect from MongoDB", "error", err)
 		} else {
 			logger.Infof("Disconnected from MongoDB")
 		}
 	}(mongoClient, ctx)
 
 	// Connect to Redis
-	redisClient, err := cache.NewRedisClient(cfg.RedisURI) // Sử dụng cache.NewRedisClient
+	redisClient, err := cache.NewRedisClient(cfg.RedisURI)
 	if err != nil {
-		logger.Fatalf("Failed to connect to Redis: %v", err)
+		logger.Fatalf("Failed to connect to Redis", "error", err)
 	}
 	defer func(redisClient *redis.Client) {
-		err := redisClient.Close()
-		if err != nil {
-			logger.Fatalf("Failed to close Redis connection: %v", err)
+		if err := redisClient.Close(); err != nil {
+			logger.Errorf("Failed to close Redis connection", "error", err)
 		} else {
 			logger.Infof("Disconnected from Redis")
 		}
@@ -70,30 +69,25 @@ func main() {
 	// Connect to RabbitMQ
 	rabbitConn, err := eventbus.NewRabbitMQConn(cfg.RabbitMQURI)
 	if err != nil {
-		logger.Fatalf("Failed to connect to RabbitMQ: %v", err)
+		logger.Fatalf("Failed to connect to RabbitMQ", "error", err)
 	}
 	defer func(rabbitConn *amqp.Connection) {
-		err := rabbitConn.Close()
-		if err != nil {
-			logger.Fatalf("Failed to close RabbitMQ connection: %v", err)
+		if err := rabbitConn.Close(); err != nil {
+			logger.Errorf("Failed to close RabbitMQ connection", "error", err)
 		} else {
 			logger.Infof("Disconnected from RabbitMQ")
 		}
 	}(rabbitConn)
-
-	metrics.Init()
-
 	// Initialize dependencies
 	pasteRepo := repository.NewMongoPasteRepository(mongoClient.Database(cfg.MongoDBName))
 	pasteCache := cache.NewRedisPasteCache(redisClient)
 	publisher, err := eventbus.NewRabbitMQPublisher(rabbitConn)
 	if err != nil {
-		logger.Fatalf("Failed to create RabbitMQ publisher: %v", err)
+		logger.Fatalf("Failed to create RabbitMQ publisher", "error", err)
 	}
 	defer func(publisher *eventbus.RabbitMQPublisher) {
-		err := publisher.Close()
-		if err != nil {
-			logger.Fatalf("Failed to close RabbitMQ publisher: %v", err)
+		if err := publisher.Close(); err != nil {
+			logger.Errorf("Failed to close RabbitMQ publisher", "error", err)
 		} else {
 			logger.Infof("Disconnected from RabbitMQ")
 		}
@@ -101,22 +95,21 @@ func main() {
 
 	pasteConsumer, err := eventbus.NewRabbitMQConsumer(rabbitConn, mongoClient.Database(cfg.MongoDBName), logger)
 	if err != nil {
-		logger.Fatalf("Failed to create RabbitMQ consumer: %v", err)
+		logger.Fatalf("Failed to create RabbitMQ consumer", "error", err)
 	}
 
 	// Start consuming messages
 	if err := pasteConsumer.Start(); err != nil {
-		logger.Fatalf("Failed to start RabbitMQ consumer: %v", err)
+		logger.Fatalf("Failed to start RabbitMQ consumer", "error", err)
 	}
 	defer func(pasteConsumer *eventbus.RabbitMQConsumer) {
-		err := pasteConsumer.Stop()
-		if err != nil {
-
+		if err := pasteConsumer.Stop(); err != nil {
+			logger.Errorf("Failed to stop RabbitMQ consumer", "error", err)
 		}
 	}(pasteConsumer)
 
 	// Initialize service and handler
-	retrieveService := paste.NewRetrieveService(pasteRepo, pasteCache, publisher)
+	retrieveService := paste.NewRetrieveService(pasteRepo, pasteCache, publisher, logger)
 	handler := handlers.NewPasteHandler(retrieveService, logger)
 
 	// Set up router
@@ -125,6 +118,7 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Get("/api/pastes/{url}/content", handler.GetPasteContent)
 	r.Get("/api/pastes/{url}/policy", handler.GetPastePolicy)
+	r.Handle("/metrics", promhttp.Handler())
 
 	// Start server
 	server := &http.Server{
@@ -135,7 +129,7 @@ func main() {
 	go func() {
 		logger.Infof("Starting server on :%s", cfg.Port)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Fatalf("Server failed: %v", err)
+			logger.Fatalf("Server failed", "error", err)
 		}
 	}()
 
@@ -148,7 +142,7 @@ func main() {
 	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Errorf("Server shutdown failed: %v", err)
+		logger.Errorf("Server shutdown failed", "error", err)
 	}
 	logger.Infof("Server stopped")
 }

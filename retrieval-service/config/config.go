@@ -29,7 +29,7 @@ func Load() (*Config, error) {
 		Port:        getEnv("PORT", "8082"),
 		MongoURI:    getEnv("MONGO_URI", "mongodb://localhost:27017"),
 		MongoDBName: getEnv("MONGO_DB_NAME", "pastebin"),
-		RedisURI:    getEnv("REDIS_URI", "redis://localhost:6379"),
+		RedisURI:    getEnv("REDIS_URI", "redis://localhost:6380"),
 		RabbitMQURI: getEnv("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/"),
 	}
 

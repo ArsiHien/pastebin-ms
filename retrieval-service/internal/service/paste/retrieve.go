@@ -1,9 +1,11 @@
 package paste
 
 import (
+	"context"
 	"fmt"
 	"retrieval-service/internal/cache"
 	"retrieval-service/internal/domain/paste"
+	"retrieval-service/internal/metrics"
 	"retrieval-service/shared"
 	"time"
 )
@@ -21,84 +23,135 @@ func NewRetrieveService(
 	repo paste.Repository,
 	cache cache.PasteCache,
 	pub paste.EventPublisher,
+	logger *shared.Logger,
 ) *RetrieveService {
 	return &RetrieveService{
 		repo:   repo,
 		cache:  cache,
 		pub:    pub,
-		logger: shared.NewLogger(),
+		logger: logger,
 	}
 }
 
 // GetPasteContent retrieves a paste's content by URL
-func (s *RetrieveService) GetPasteContent(url string) (*paste.RetrievePasteResponse, error) {
-	p, err := s.fetchPaste(url)
+func (s *RetrieveService) GetPasteContent(ctx context.Context, url string) (*paste.RetrievePasteResponse, error) {
+	logger := s.logger.With("requestID", ctx.Value("requestID"), "url", url)
+
+	// Giai đoạn 2: Lấy paste
+	phaseStart := time.Now()
+	p, err := s.fetchPaste(ctx, url)
 	if err != nil {
 		return nil, err
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("fetch_paste").Observe(time.Since(phaseStart).Seconds())
 
+	// Giai đoạn 3: Kiểm tra trạng thái hết hạn
+	phaseStart = time.Now()
 	if s.isExpired(p) {
 		if err = s.cache.Delete(url); err != nil {
-			s.logger.Errorf("Failed to delete expired paste from cache %s: %v", url, err)
+			logger.Errorf("Failed to delete expired paste from cache", "error", err.Error())
 		}
+		logger.Errorf("Paste expired")
 		return nil, shared.ErrPasteExpired
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("check_expiration").Observe(time.Since(phaseStart).Seconds())
 
-	if err = s.processView(p); err != nil {
-		s.logger.Errorf("Failed to process view for paste %s: %v", url, err)
+	// Giai đoạn 4: Xử lý view
+	phaseStart = time.Now()
+	if err = s.processView(ctx, p); err != nil {
+		logger.Errorf("Failed to process view", "error", err.Error())
 		// Continue to return paste even if view processing fails
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("process_view").Observe(time.Since(phaseStart).Seconds())
 
-	return &paste.RetrievePasteResponse{
+	// Giai đoạn 5: Tạo response
+	phaseStart = time.Now()
+	resp := &paste.RetrievePasteResponse{
 		URL:           p.URL,
 		Content:       p.Content,
 		RemainingTime: s.calculateTimeUntilExpiration(p),
-	}, nil
+	}
+	logger.Infof("Prepared response")
+	metrics.RetrievalRequestDuration.WithLabelValues("prepare_response").Observe(time.Since(phaseStart).Seconds())
+
+	return resp, nil
 }
 
 // GetPastePolicy retrieves a paste's expiration policy
-func (s *RetrieveService) GetPastePolicy(url string) (string, error) {
-	p, err := s.fetchPaste(url)
+func (s *RetrieveService) GetPastePolicy(ctx context.Context, url string) (string, error) {
+	logger := s.logger.With("requestID", ctx.Value("requestID"), "url", url)
+
+	// Giai đoạn 2: Lấy paste
+	phaseStart := time.Now()
+	p, err := s.fetchPaste(ctx, url)
 	if err != nil {
 		return "", err
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("fetch_paste").Observe(time.Since(phaseStart).Seconds())
 
+	// Giai đoạn 3: Kiểm tra trạng thái hết hạn
+	phaseStart = time.Now()
 	if s.isExpired(p) {
 		if err = s.cache.Delete(url); err != nil {
-			s.logger.Errorf("Failed to delete expired paste from cache %s: %v", url, err)
+			logger.Errorf("Failed to delete expired paste from cache", "error", err.Error())
 		}
+		logger.Errorf("Paste expired")
 		return "", shared.ErrPasteExpired
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("check_expiration").Observe(time.Since(phaseStart).Seconds())
 
-	return s.calculateTimeUntilExpiration(p), nil
+	// Giai đoạn 4: Tạo response
+	phaseStart = time.Now()
+	resp := s.calculateTimeUntilExpiration(p)
+	logger.Infof("Prepared response")
+	metrics.RetrievalRequestDuration.WithLabelValues("prepare_response").Observe(time.Since(phaseStart).Seconds())
+
+	return resp, nil
 }
 
 // fetchPaste retrieves a paste from cache or repository
-func (s *RetrieveService) fetchPaste(url string) (*paste.Paste, error) {
-	// Check cache first
+func (s *RetrieveService) fetchPaste(ctx context.Context, url string) (*paste.Paste, error) {
+	logger := s.logger.With("requestID", ctx.Value("requestID"), "url", url)
+
+	// Giai đoạn 2.1: Kiểm tra cache
+	phaseStart := time.Now()
 	p, err := s.cache.Get(url)
 	if err != nil {
-		s.logger.Errorf("Cache error for URL %s: %v", url, err)
+		logger.Errorf("Cache error", "error", err.Error())
 	}
+	if p != nil {
+		logger.Infof("Cache hit")
+		metrics.RetrievalRequestDuration.WithLabelValues("redis_check").Observe(time.Since(phaseStart).Seconds())
+		return p, nil
+	}
+	logger.Infof("Cache miss")
+	metrics.RetrievalRequestDuration.WithLabelValues("redis_check").Observe(time.Since(phaseStart).Seconds())
 
-	// If not in cache, fetch from repository
+	// Giai đoạn 2.2: Truy vấn MongoDB
+	phaseStart = time.Now()
+	p, err = s.repo.FindByURL(url)
+	if err != nil {
+		logger.Errorf("Failed to find paste in MongoDB", "error", err.Error())
+		return nil, fmt.Errorf("failed to find paste: %w", err)
+	}
 	if p == nil {
-		p, err = s.repo.FindByURL(url)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find paste: %w", err)
-		}
-		if p == nil {
-			return nil, shared.ErrPasteNotFound
-		}
+		logger.Errorf("Paste not found in MongoDB")
+		return nil, shared.ErrPasteNotFound
+	}
+	logger.Infof("Retrieved paste from MongoDB")
+	metrics.RetrievalRequestDuration.WithLabelValues("mongodb_query").Observe(time.Since(phaseStart).Seconds())
 
-		// Cache the paste if using timed expiration
-		if p.ExpirationPolicy.Type == paste.TimedExpiration {
-			if err = s.cache.Set(p); err != nil {
-				s.logger.Errorf("Failed to cache paste %s: %v", url, err)
-				// Continue even if caching fails
-			}
+	// Giai đoạn 2.3: Lưu vào cache
+	phaseStart = time.Now()
+	if p.ExpirationPolicy.Type == paste.TimedExpiration {
+		if err = s.cache.Set(p); err != nil {
+			logger.Errorf("Failed to cache paste", "error", err.Error())
+			// Continue even if caching fails
+		} else {
+			logger.Infof("Cached paste")
 		}
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("redis_set").Observe(time.Since(phaseStart).Seconds())
 
 	return p, nil
 }
@@ -122,24 +175,42 @@ func (s *RetrieveService) isExpired(p *paste.Paste) bool {
 }
 
 // processView handles the view event for a paste
-func (s *RetrieveService) processView(p *paste.Paste) error {
-	// If burn after read, mark as read
+func (s *RetrieveService) processView(ctx context.Context, p *paste.Paste) error {
+	logger := s.logger.With("requestID", ctx.Value("requestID"), "url", p.URL)
+
+	// Giai đoạn 4.1: Xử lý burn after read
+	phaseStart := time.Now()
 	if p.ExpirationPolicy.Type == paste.BurnAfterReadExpiration && !p.ExpirationPolicy.IsRead {
 		if err := s.repo.MarkAsRead(p.URL); err != nil {
+			logger.Errorf("Failed to mark paste as read", "error", err.Error())
 			return err
 		}
-
 		p.ExpirationPolicy.IsRead = true
-		return s.pub.PublishBurnAfterReadPasteViewedEvent(paste.BurnAfterReadPasteViewedEvent{
+		if err := s.pub.PublishBurnAfterReadPasteViewedEvent(paste.BurnAfterReadPasteViewedEvent{
 			URL: p.URL,
-		})
+		}); err != nil {
+			logger.Errorf("Failed to publish burn_after_read event", "error", err.Error())
+			return err
+		}
+		logger.Infof("Published burn_after_read event")
+		metrics.RetrievalRequestDuration.WithLabelValues("rabbitmq_publish_burn").Observe(time.Since(phaseStart).Seconds())
+		return nil
 	}
+	metrics.RetrievalRequestDuration.WithLabelValues("rabbitmq_publish_burn").Observe(time.Since(phaseStart).Seconds())
 
-	// Publish regular view event
-	return s.pub.PublishPasteViewedEvent(paste.ViewedEvent{
+	// Giai đoạn 4.2: Publish regular view event
+	phaseStart = time.Now()
+	if err := s.pub.PublishPasteViewedEvent(paste.ViewedEvent{
 		URL:      p.URL,
 		ViewedAt: time.Now(),
-	})
+	}); err != nil {
+		logger.Errorf("Failed to publish paste_viewed event", "error", err.Error())
+		return err
+	}
+	logger.Infof("Published paste_viewed event")
+	metrics.RetrievalRequestDuration.WithLabelValues("rabbitmq_publish_viewed").Observe(time.Since(phaseStart).Seconds())
+
+	return nil
 }
 
 // calculateTimeUntilExpiration returns a human-readable string for remaining time

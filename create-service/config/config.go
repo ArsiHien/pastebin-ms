@@ -36,7 +36,9 @@ func LoadConfig() *AppConfig {
 	}
 
 	return &AppConfig{
-		MySQLDSN:    getEnv("MYSQL_DSN", "root:password@tcp(localhost:3306)/pastebin?charset=utf8mb4&parseTime=True"),
+		MySQLDSN: getEnv("MYSQL_DSN",
+			"root:123456@tcp(localhost:3307)/pastebin?charset=utf8mb4"+
+				"&parseTime=True"),
 		RabbitMQURI: getEnv("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/"),
 		Port:        getEnv("PORT", "8080"),
 		URLLength:   getIntEnv("URL_LENGTH", 5),
