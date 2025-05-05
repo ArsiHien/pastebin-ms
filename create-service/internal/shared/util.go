@@ -1,16 +1,18 @@
 package shared
 
 import (
-	"crypto/rand"
-	"encoding/hex"
+    "strings"
+    "github.com/google/uuid"
 )
 
 func GenerateURL(length int) (string, error) {
-	byteLen := (length + 1) / 2
-	bytes := make([]byte, byteLen)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(bytes)[:length], nil
+    u, err := uuid.NewRandom()
+    if err != nil {
+        return "", err
+    }
+    cleanUUID := strings.ReplaceAll(u.String(), "-", "")
+    if length > len(cleanUUID) {
+        length = len(cleanUUID)
+    }
+    return cleanUUID[:length], nil
 }
