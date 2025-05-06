@@ -2,15 +2,18 @@ package metrics
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-// PasteProcessingDuration đo thời gian từ khi tạo paste đến khi lưu vào cơ sở dữ liệu
-var PasteProcessingDuration = prometheus.NewHistogram(
-	prometheus.HistogramOpts{
-		Name:    "paste_processing_duration_seconds",
-		Help:    "Time from paste creation to database insert in seconds.",
-		Buckets: prometheus.DefBuckets,
-	},
+var (
+	PasteProcessingDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "paste_processing_duration_seconds",
+			Help:    "Time taken to process paste creation event",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"phase"}, // mongo_save, cache_save, total
+	)
 )
 
 // RetrievalRequestDuration đo thời gian từng giai đoạn trong Retrieval Service
@@ -24,6 +27,5 @@ var RetrievalRequestDuration = prometheus.NewHistogramVec(
 )
 
 func init() {
-	prometheus.MustRegister(PasteProcessingDuration)
 	prometheus.MustRegister(RetrievalRequestDuration)
 }

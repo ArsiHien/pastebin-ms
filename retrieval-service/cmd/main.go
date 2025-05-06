@@ -93,7 +93,8 @@ func main() {
 		}
 	}(publisher)
 
-	pasteConsumer, err := eventbus.NewRabbitMQConsumer(rabbitConn, mongoClient.Database(cfg.MongoDBName), logger)
+	pasteConsumer, err := eventbus.NewRabbitMQConsumer(rabbitConn,
+		mongoClient.Database(cfg.MongoDBName), pasteCache, logger)
 	if err != nil {
 		logger.Fatalf("Failed to create RabbitMQ consumer", "error", err)
 	}

@@ -3,6 +3,7 @@ package eventbus
 import (
 	"context"
 	"encoding/json"
+	"retrieval-service/internal/cache"
 	"retrieval-service/internal/domain/paste"
 	"retrieval-service/internal/metrics"
 	"retrieval-service/shared"
@@ -24,11 +25,12 @@ type PasteMessage struct {
 type RabbitMQConsumer struct {
 	channel     *amqp.Channel
 	collection  *mongo.Collection
+	cache       cache.PasteCache
 	logger      *shared.Logger
 	consumerTag string
 }
 
-func NewRabbitMQConsumer(conn *amqp.Connection, db *mongo.Database, logger *shared.Logger) (*RabbitMQConsumer, error) {
+func NewRabbitMQConsumer(conn *amqp.Connection, db *mongo.Database, cache cache.PasteCache, logger *shared.Logger) (*RabbitMQConsumer, error) {
 	ch, err := conn.Channel()
 	if err != nil {
 		logger.Errorf("Failed to open RabbitMQ channel", "error", err.Error())
@@ -57,6 +59,7 @@ func NewRabbitMQConsumer(conn *amqp.Connection, db *mongo.Database, logger *shar
 	return &RabbitMQConsumer{
 		channel:     ch,
 		collection:  collection,
+		cache:       cache,
 		logger:      logger,
 		consumerTag: "paste-creation-consumer",
 	}, nil
@@ -160,6 +163,7 @@ func (c *RabbitMQConsumer) handleMessage(delivery amqp.Delivery) {
 		return
 	}
 
+	phaseStart := time.Now()
 	_, err := c.collection.InsertOne(ctx, newPaste)
 	if err != nil {
 		logger.Errorf("Failed to save paste to database", "error", err.Error(), "paste", newPaste)
@@ -169,18 +173,27 @@ func (c *RabbitMQConsumer) handleMessage(delivery amqp.Delivery) {
 		return
 	}
 	logger.Infof("Successfully saved paste to database", "url", newPaste.URL)
+	metrics.PasteProcessingDuration.WithLabelValues("mongo_save").Observe(time.Since(phaseStart).Seconds())
 
-	// Giai đoạn 3: Ghi metric
+	// Giai đoạn 3: Lưu paste vào Redis cache
+	phaseStart = time.Now()
+	if err := c.cache.Set(&newPaste); err != nil {
+		logger.Errorf("Failed to save paste to Redis cache", "error", err.Error(), "url", newPaste.URL)
+		// Không nack vì MongoDB đã lưu thành công
+	} else {
+		logger.Infof("Successfully saved paste to Redis cache", "url", newPaste.URL)
+	}
+	metrics.PasteProcessingDuration.WithLabelValues("cache_save").Observe(time.Since(phaseStart).Seconds())
+
 	if !newPaste.CreatedAt.IsZero() {
 		duration := time.Since(newPaste.CreatedAt).Seconds()
-		metrics.PasteProcessingDuration.Observe(duration)
-		logger.Infof("Latency from CreatedAt to Mongo save", "durationSeconds", duration)
+		metrics.PasteProcessingDuration.WithLabelValues("total").Observe(duration)
+		logger.Infof("Latency from CreatedAt to processing complete", "durationSeconds", duration)
 	}
 
 	// Ack message
 	if err := delivery.Ack(false); err != nil {
 		logger.Errorf("Failed to acknowledge message", "error", err.Error())
-		return
 	}
 }
 
