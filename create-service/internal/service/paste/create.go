@@ -2,6 +2,7 @@ package paste
 
 import (
 	"context"
+	"encoding/json"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/domain/paste"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/metrics"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/shared"
@@ -31,7 +32,8 @@ func NewCreatePasteUseCase(pasteRepo paste.Repository,
 	return &CreatePasteUseCase{
 		PasteRepo:            pasteRepo,
 		ExpirationPolicyRepo: expirationPolicyRepo,
-		Publisher:            pub}
+		Publisher:            pub,
+	}
 }
 
 func (uc *CreatePasteUseCase) Execute(ctx context.Context, req CreatePasteRequest) (
@@ -85,7 +87,7 @@ func (uc *CreatePasteUseCase) Execute(ctx context.Context, req CreatePasteReques
 	}
 	metrics.CreateRequestDuration.WithLabelValues("expiration_policy").Observe(time.Since(phaseStart).Seconds())
 
-	// Giai đoạn 5: Lưu Paste vào MySQL
+	// Giai đoạn 5: Chuẩn bị Paste và đưa vào queue
 	phaseStart = time.Now()
 	newPaste := paste.Paste{
 		URL:                url,
@@ -98,14 +100,20 @@ func (uc *CreatePasteUseCase) Execute(ctx context.Context, req CreatePasteReques
 			Duration: expirationPolicy.Duration,
 		},
 	}
-	if err := uc.PasteRepo.Save(&newPaste); err != nil {
-		logger.Error("Failed to save paste", zap.Error(err))
+	// Publish paste vào queue để lưu MySQL bất đồng bộ
+	pasteData, err := json.Marshal(newPaste)
+	if err != nil {
+		logger.Error("Failed to marshal paste for queue", zap.Error(err))
 		return nil, err
 	}
-	logger.Info("Saved paste to MySQL", zap.String("url", url))
-	metrics.CreateRequestDuration.WithLabelValues("mysql_save").Observe(time.Since(phaseStart).Seconds())
+	if err := uc.Publisher.PublishPasteSave(ctx, pasteData); err != nil {
+		logger.Error("Failed to publish paste to save queue", zap.Error(err))
+		return nil, err
+	}
+	logger.Info("Published paste to save queue", zap.String("url", url))
+	metrics.CreateRequestDuration.WithLabelValues("rabbitmq_publish_save").Observe(time.Since(phaseStart).Seconds())
 
-	// Giai đoạn 6: Publish sự kiện
+	// Giai đoạn 6: Publish sự kiện paste.created
 	phaseStart = time.Now()
 	if err := uc.Publisher.PublishPasteCreated(&newPaste); err != nil {
 		logger.Error("Failed to publish paste.created event", zap.Error(err))

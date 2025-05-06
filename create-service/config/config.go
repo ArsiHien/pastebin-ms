@@ -4,6 +4,7 @@ import (
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/domain/paste"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/eventbus"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/repository"
+	"github.com/ArsiHien/pastebin-ms/create-service/internal/worker"
 	"github.com/joho/godotenv"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"gorm.io/driver/mysql"
@@ -27,6 +28,7 @@ type App struct {
 	PasteRepo            paste.Repository
 	ExpirationPolicyRepo paste.ExpirationPolicyRepository
 	Publisher            paste.EventPublisher
+	MySQLSaveWorker      *worker.MySQLSaveWorker // Thêm worker
 }
 
 func LoadConfig() *AppConfig {
@@ -53,12 +55,16 @@ func Initialize(cfg *AppConfig) (*App, error) {
 	}
 
 	if err := setupRabbitMQ(app); err != nil {
-		// Clean up before returning error
 		Cleanup(app)
 		return nil, err
 	}
 
 	setupRepositories(app)
+
+	if err := setupWorker(app); err != nil {
+		Cleanup(app)
+		return nil, err
+	}
 
 	return app, nil
 }
@@ -100,7 +106,31 @@ func setupRepositories(app *App) {
 	app.PasteRepo = repository.NewPasteMySQLRepository(app.DB)
 }
 
+func setupWorker(app *App) error {
+	saveWorker, err := worker.NewMySQLSaveWorker(app.RabbitConn, app.PasteRepo)
+	if err != nil {
+		log.Printf("Failed to create MySQL save saveWorker: %v", err)
+		return err
+	}
+	app.MySQLSaveWorker = saveWorker
+
+	if err := saveWorker.Start(); err != nil {
+		log.Printf("Failed to start MySQL save saveWorker: %v", err)
+		return err
+	}
+	log.Println("MySQL save saveWorker started successfully!")
+	return nil
+}
+
 func Cleanup(app *App) {
+	if app.MySQLSaveWorker != nil {
+		if err := app.MySQLSaveWorker.Stop(); err != nil {
+			log.Printf("Error stopping MySQL save worker: %v", err)
+		} else {
+			log.Println("MySQL save worker stopped")
+		}
+	}
+
 	if app.Publisher != nil {
 		if err := app.Publisher.Close(); err != nil {
 			log.Printf("Error closing publisher: %v", err)

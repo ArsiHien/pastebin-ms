@@ -1,6 +1,7 @@
 package eventbus
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/domain/paste"
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -50,6 +51,24 @@ func (p *RabbitMQPublisher) PublishPasteCreated(paste *paste.Paste) error {
 		"pastebin_events", "paste.created", false, false,
 		amqp.Publishing{ContentType: "application/json", Body: body},
 	)
+}
+
+func (p *RabbitMQPublisher) PublishPasteSave(ctx context.Context, pasteData []byte) error {
+	err := p.channel.PublishWithContext(
+		ctx,
+		"pastebin_events",
+		"paste.save",
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/json",
+			Body:        pasteData,
+		},
+	)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (p *RabbitMQPublisher) Close() error {
