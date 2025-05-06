@@ -6,6 +6,7 @@ import (
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/domain/paste"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/metrics"
 	amqp "github.com/rabbitmq/amqp091-go"
+	"strings"
 	"time"
 )
 
@@ -80,6 +81,7 @@ func (w *MySQLSaveWorker) handleMessage(msg amqp.Delivery) {
 	var p paste.Paste
 	if err := json.Unmarshal(msg.Body, &p); err != nil {
 		if err := msg.Nack(false, false); err != nil {
+
 		}
 		return
 	}
@@ -88,9 +90,16 @@ func (w *MySQLSaveWorker) handleMessage(msg amqp.Delivery) {
 	defer cancel()
 
 	if err := w.repo.Save(&p); err != nil {
+		if strings.Contains(err.Error(), "Duplicate entry") && strings.Contains(err.Error(), "uni_pastes_url") {
+			if err := msg.Ack(false); err != nil {
+			}
+			return
+		}
 		if err := msg.Nack(false, true); err != nil {
 		}
 		return
+	}
+	if err := msg.Ack(false); err != nil {
 	}
 
 	metrics.CreateRequestDuration.WithLabelValues("mysql_save").Observe(time.Since(phaseStart).Seconds())

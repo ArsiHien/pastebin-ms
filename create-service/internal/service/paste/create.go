@@ -7,6 +7,7 @@ import (
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/metrics"
 	"github.com/ArsiHien/pastebin-ms/create-service/internal/shared"
 	"go.uber.org/zap"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,8 @@ type CreatePasteUseCase struct {
 	PasteRepo            paste.Repository
 	ExpirationPolicyRepo paste.ExpirationPolicyRepository
 	Publisher            paste.EventPublisher
+	policyCache          map[string]*paste.ExpirationPolicy // Cache in-memory
+	cacheMutex           sync.RWMutex                       // Bảo vệ cache
 }
 
 func NewCreatePasteUseCase(pasteRepo paste.Repository,
@@ -33,6 +36,7 @@ func NewCreatePasteUseCase(pasteRepo paste.Repository,
 		PasteRepo:            pasteRepo,
 		ExpirationPolicyRepo: expirationPolicyRepo,
 		Publisher:            pub,
+		policyCache:          make(map[string]*paste.ExpirationPolicy),
 	}
 }
 
@@ -66,25 +70,39 @@ func (uc *CreatePasteUseCase) Execute(ctx context.Context, req CreatePasteReques
 
 	// Giai đoạn 4: Tìm hoặc tạo Expiration Policy
 	phaseStart = time.Now()
-	expirationPolicy, err := uc.ExpirationPolicyRepo.FindByPolicyTypeAndDuration(
-		req.PolicyType, normalizedDuration)
-	if err != nil {
-		logger.Error("Failed to find expiration policy", zap.Error(err))
-		return nil, err
-	}
-	if expirationPolicy == nil {
-		expirationPolicy = &paste.ExpirationPolicy{
-			Type:     req.PolicyType,
-			Duration: normalizedDuration,
-		}
-		if err := uc.ExpirationPolicyRepo.Save(expirationPolicy); err != nil {
-			logger.Error("Failed to save expiration policy", zap.Error(err))
+	cacheKey := string(req.PolicyType) + ":" + normalizedDuration
+
+	// Kiểm tra cache trước
+	uc.cacheMutex.RLock()
+	expirationPolicy, exists := uc.policyCache[cacheKey]
+	uc.cacheMutex.RUnlock()
+
+	if !exists {
+		// Cache miss, truy vấn MySQL
+		expirationPolicy, err = uc.ExpirationPolicyRepo.FindByPolicyTypeAndDuration(req.PolicyType, normalizedDuration)
+		if err != nil {
+			logger.Error("Failed to find expiration policy", zap.Error(err))
 			return nil, err
 		}
-		logger.Info("Saved new expiration policy", zap.Any("policy", expirationPolicy))
-	} else {
-		logger.Info("Found existing expiration policy", zap.Any("policy", expirationPolicy))
+		if expirationPolicy == nil {
+			expirationPolicy = &paste.ExpirationPolicy{
+				Type:     req.PolicyType,
+				Duration: normalizedDuration,
+			}
+			if err := uc.ExpirationPolicyRepo.Save(expirationPolicy); err != nil {
+				logger.Error("Failed to save expiration policy", zap.Error(err))
+				return nil, err
+			}
+			logger.Info("Saved new expiration policy", zap.Any("policy", expirationPolicy))
+		}
+
+		// Lưu vào cache
+		uc.cacheMutex.Lock()
+		uc.policyCache[cacheKey] = expirationPolicy
+		uc.cacheMutex.Unlock()
 	}
+
+	logger.Info("Found expiration policy", zap.Any("policy", expirationPolicy))
 	metrics.CreateRequestDuration.WithLabelValues("expiration_policy").Observe(time.Since(phaseStart).Seconds())
 
 	// Giai đoạn 5: Chuẩn bị Paste và đưa vào queue
